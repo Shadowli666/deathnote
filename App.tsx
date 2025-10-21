@@ -139,6 +139,20 @@ const dbAddEvaluation = async (evaluationData: Omit<Evaluation, 'id' | 'subjectI
     saveDB();
 };
 
+const dbDeleteEvaluation = async (evaluationId: string) => {
+    await initDB();
+    db.exec("BEGIN TRANSACTION;");
+    try {
+        db.run("DELETE FROM grades WHERE evaluationId = ?", [evaluationId]);
+        db.run("DELETE FROM evaluations WHERE id = ?", [evaluationId]);
+        db.exec("COMMIT;");
+        saveDB();
+    } catch(e) {
+        console.error("Failed to delete evaluation:", e);
+        db.exec("ROLLBACK;");
+    }
+};
+
 const dbUpdateGrade = async (studentId: string, evaluationId: string, score: number | null) => { await initDB(); db.run("UPDATE grades SET score = ? WHERE studentId = ? AND evaluationId = ?", [score, studentId, evaluationId]); saveDB(); };
 // ============== DB LOGIC END ==============
 
@@ -227,6 +241,15 @@ function App() {
     setCurrentGrades(updatedGrades);
   };
   
+  const handleDeleteEvaluation = async (evaluationId: string) => {
+    if (!selectedSubjectId) return;
+    await dbDeleteEvaluation(evaluationId);
+    const updatedEvaluations = await dbGetEvaluationsForSubject(selectedSubjectId);
+    const updatedGrades = await dbGetGradesForSubject(selectedSubjectId);
+    setCurrentEvaluations(updatedEvaluations);
+    setCurrentGrades(updatedGrades);
+  };
+
   const handleUpdateGrade = async (studentId: string, evaluationId: string, score: number | null) => {
       await dbUpdateGrade(studentId, evaluationId, score);
       setCurrentGrades(prevGrades => {
@@ -270,6 +293,7 @@ function App() {
         onUpdateGrade={handleUpdateGrade}
         onEnrollStudent={handleEnrollStudent}
         onEnrollStudents={handleEnrollStudents}
+        onDeleteEvaluation={handleDeleteEvaluation}
         onBack={() => setSelectedSubjectId(null)}
       />
     );

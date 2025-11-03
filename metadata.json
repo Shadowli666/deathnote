@@ -1,5 +1,5 @@
 {
-  "name": "Evaluador de Notas Pro",
+  "name": "Evaluador de Notas",
   "description": "Una aplicación web para que los educadores gestionen las calificaciones de los estudiantes por materia. Permite agregar evaluaciones ponderadas, dividir el período en tres cortes y cargar listas de estudiantes a través de CSV.",
   "requestFramePermissions": []
 }

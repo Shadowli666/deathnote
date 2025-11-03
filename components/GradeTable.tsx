@@ -1,14 +1,16 @@
 import React, { useMemo, useCallback } from 'react';
 import { Student, Evaluation, Grade } from '../types';
+import { TrashIcon } from './Icons';
 
 interface GradeTableProps {
   students: Student[];
   evaluations: Evaluation[];
   grades: Grade[];
   onUpdateGrade: (studentId: string, evaluationId: string, score: number | null) => void;
+  onUnenrollStudent: (studentId: string) => void;
 }
 
-const GradeTable: React.FC<GradeTableProps> = ({ students, evaluations, grades, onUpdateGrade }) => {
+const GradeTable: React.FC<GradeTableProps> = ({ students, evaluations, grades, onUpdateGrade, onUnenrollStudent }) => {
   const evaluationsByCorte = useMemo(() => {
     const cortes: { [key in 1 | 2 | 3]: Evaluation[] } = { 1: [], 2: [], 3: [] };
     evaluations.forEach(ev => cortes[ev.corte].push(ev));
@@ -22,7 +24,7 @@ const GradeTable: React.FC<GradeTableProps> = ({ students, evaluations, grades, 
       return grades.find(g => g.studentId === studentId && g.evaluationId === evaluationId);
   }, [grades]);
   
-  const calculateCorteTotal = useCallback((studentId: string, corte: 1 | 2 | 3) => {
+  const calculateWeightedCorteSum = useCallback((studentId: string, corte: 1 | 2 | 3) => {
     const corteEvals = evaluationsByCorte[corte];
     if (corteEvals.length === 0) return 0;
     return corteEvals.reduce((total, ev) => {
@@ -32,8 +34,21 @@ const GradeTable: React.FC<GradeTableProps> = ({ students, evaluations, grades, 
     }, 0);
   }, [evaluationsByCorte, getGrade]);
 
+  const calculateNormalizedCorteGrade = useCallback((studentId: string, corte: 1 | 2 | 3) => {
+    const corteEvals = evaluationsByCorte[corte];
+    if (corteEvals.length === 0) return 0;
+    
+    const weightedSum = calculateWeightedCorteSum(studentId, corte);
+    const totalPercentageInCorte = corteEvals.reduce((total, ev) => total + ev.percentage, 0);
+    
+    if (totalPercentageInCorte === 0) return 0;
+
+    // Normalize the grade to a 0-20 scale
+    return weightedSum / (totalPercentageInCorte / 100);
+  }, [evaluationsByCorte, calculateWeightedCorteSum]);
+
+
   const renderHeaders = () => {
-    // FIX: Replaced JSX.Element with React.ReactElement to resolve namespace issue.
     const headers: React.ReactElement[] = [];
     ([1, 2, 3] as const).forEach(corteNum => {
       if (evaluationsByCorte[corteNum].length > 0) {
@@ -63,21 +78,35 @@ const GradeTable: React.FC<GradeTableProps> = ({ students, evaluations, grades, 
           <tr>
             <th scope="col" className="p-3 text-sm font-semibold tracking-wide text-left sticky top-0 left-0 bg-gray-100 dark:bg-gray-700 z-10">Estudiante</th>
             <th scope="col" className="p-3 text-sm font-semibold tracking-wide text-left sticky top-0 bg-gray-100 dark:bg-gray-700">Cédula</th>
+            <th scope="col" className="p-3 text-sm font-semibold tracking-wide text-left sticky top-0 bg-gray-100 dark:bg-gray-700">Acciones</th>
             {renderHeaders()}
             <th scope="col" className="p-3 text-sm font-bold tracking-wide text-left sticky top-0 bg-gray-200 dark:bg-gray-600">Nota Final</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
           {sortedStudents.map(student => {
-            const totalCorte1 = calculateCorteTotal(student.id, 1);
-            const totalCorte2 = calculateCorteTotal(student.id, 2);
-            const totalCorte3 = calculateCorteTotal(student.id, 3);
-            const finalGrade = totalCorte1 + totalCorte2 + totalCorte3;
+            const weightedCorte1 = calculateWeightedCorteSum(student.id, 1);
+            const weightedCorte2 = calculateWeightedCorteSum(student.id, 2);
+            const weightedCorte3 = calculateWeightedCorteSum(student.id, 3);
+            const finalGrade = weightedCorte1 + weightedCorte2 + weightedCorte3;
 
             return (
               <tr key={student.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
                 <td className="p-3 font-medium text-gray-700 dark:text-gray-200 sticky left-0 bg-white dark:bg-gray-800 z-10">{student.name}</td>
                 <td className="p-3">{student.id}</td>
+                <td className="p-3">
+                    <button
+                        onClick={() => {
+                            if (window.confirm(`¿Estás seguro de que deseas eliminar a ${student.name} de esta materia? Se borrarán todas sus calificaciones.`)) {
+                                onUnenrollStudent(student.id);
+                            }
+                        }}
+                        className="p-1 text-gray-500 hover:text-red-600 dark:hover:text-red-400 transition-colors"
+                        aria-label={`Eliminar a ${student.name}`}
+                    >
+                        <TrashIcon className="w-5 h-5" />
+                    </button>
+                </td>
                 {([1, 2, 3] as const).map(corteNum => (
                     <React.Fragment key={`${student.id}-corte-${corteNum}`}>
                         {evaluationsByCorte[corteNum].map(ev => {
@@ -101,7 +130,7 @@ const GradeTable: React.FC<GradeTableProps> = ({ students, evaluations, grades, 
                         })}
                         {evaluationsByCorte[corteNum].length > 0 && (
                             <td className="p-3 font-bold bg-gray-50 dark:bg-gray-700 text-gray-800 dark:text-gray-200">
-                               {calculateCorteTotal(student.id, corteNum).toFixed(2)}
+                               {calculateNormalizedCorteGrade(student.id, corteNum).toFixed(2)}
                             </td>
                         )}
                     </React.Fragment>

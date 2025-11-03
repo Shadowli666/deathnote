@@ -126,6 +126,28 @@ const dbEnrollStudent = async (studentToEnroll: Student, subjectId: string): Pro
     return true;
 };
 
+const dbUnenrollStudent = async (studentId: string, subjectId: string) => {
+    await initDB();
+    db.exec("BEGIN TRANSACTION;");
+    try {
+        // Usar una subconsulta para encontrar los IDs de evaluación relevantes
+        db.run(`
+            DELETE FROM grades 
+            WHERE studentId = ? 
+            AND evaluationId IN (SELECT id FROM evaluations WHERE subjectId = ?)
+        `, [studentId, subjectId]);
+        
+        // Eliminar la matrícula
+        db.run("DELETE FROM enrollments WHERE studentId = ? AND subjectId = ?", [studentId, subjectId]);
+        
+        db.exec("COMMIT;");
+        saveDB();
+    } catch(e) {
+        console.error("Failed to unenroll student:", e);
+        db.exec("ROLLBACK;");
+    }
+};
+
 const dbAddEvaluation = async (evaluationData: Omit<Evaluation, 'id' | 'subjectId'>, subjectId: string) => {
     await initDB();
     const newEval = { ...evaluationData, id: `eval-${Date.now()}`, subjectId };
@@ -136,6 +158,12 @@ const dbAddEvaluation = async (evaluationData: Omit<Evaluation, 'id' | 'subjectI
         enrolledStudents.forEach(student => gradeStmt.run([student.id, newEval.id, null]));
         gradeStmt.free();
     }
+    saveDB();
+};
+
+const dbUpdateEvaluation = async (evaluation: Evaluation) => {
+    await initDB();
+    db.run("UPDATE evaluations SET name = ?, percentage = ?, corte = ? WHERE id = ?", [evaluation.name, evaluation.percentage, evaluation.corte, evaluation.id]);
     saveDB();
 };
 
@@ -232,6 +260,16 @@ function App() {
     return success;
   };
 
+  const handleUnenrollStudent = async (studentId: string) => {
+      if (!selectedSubjectId) return;
+      await dbUnenrollStudent(studentId, selectedSubjectId);
+      // Recargar los datos para asegurar la consistencia de la UI
+      const updatedStudents = await dbGetEnrolledStudentsForSubject(selectedSubjectId);
+      const updatedGrades = await dbGetGradesForSubject(selectedSubjectId);
+      setCurrentStudents(updatedStudents);
+      setCurrentGrades(updatedGrades);
+  };
+
   const handleAddEvaluation = async (evaluationData: Omit<Evaluation, 'id' | 'subjectId'>) => {
     if (!selectedSubjectId) return;
     await dbAddEvaluation(evaluationData, selectedSubjectId);
@@ -241,6 +279,13 @@ function App() {
     setCurrentGrades(updatedGrades);
   };
   
+  const handleUpdateEvaluation = async (evaluation: Evaluation) => {
+      if (!selectedSubjectId) return;
+      await dbUpdateEvaluation(evaluation);
+      const updatedEvaluations = await dbGetEvaluationsForSubject(selectedSubjectId);
+      setCurrentEvaluations(updatedEvaluations);
+  };
+
   const handleDeleteEvaluation = async (evaluationId: string) => {
     if (!selectedSubjectId) return;
     await dbDeleteEvaluation(evaluationId);
@@ -290,10 +335,12 @@ function App() {
         evaluations={currentEvaluations}
         grades={currentGrades}
         onAddEvaluation={handleAddEvaluation}
+        onUpdateEvaluation={handleUpdateEvaluation}
         onUpdateGrade={handleUpdateGrade}
         onEnrollStudent={handleEnrollStudent}
         onEnrollStudents={handleEnrollStudents}
         onDeleteEvaluation={handleDeleteEvaluation}
+        onUnenrollStudent={handleUnenrollStudent}
         onBack={() => setSelectedSubjectId(null)}
       />
     );

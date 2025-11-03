@@ -1,4 +1,5 @@
-import React, { useState, useMemo, useEffect } from 'react';
+
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Student, Subject, Evaluation, Grade, Enrollment } from './types';
 import SubjectView from './components/SubjectView';
 import Modal from './components/Modal';
@@ -15,17 +16,24 @@ const MIGRATED_KEY = 'data-migrated-to-sqlite';
 const createSchema = () => {
   if (!db) return;
   db.run(`CREATE TABLE IF NOT EXISTS students (id TEXT PRIMARY KEY, name TEXT, email TEXT)`);
-  db.run(`CREATE TABLE IF NOT EXISTS subjects (id TEXT PRIMARY KEY, name TEXT, period TEXT)`);
+  db.run(`CREATE TABLE IF NOT EXISTS subjects (id TEXT PRIMARY KEY, name TEXT, period TEXT, ordering INTEGER)`);
   db.run(`CREATE TABLE IF NOT EXISTS evaluations (id TEXT PRIMARY KEY, subjectId TEXT, corte INTEGER, name TEXT, percentage REAL, FOREIGN KEY(subjectId) REFERENCES subjects(id))`);
   db.run(`CREATE TABLE IF NOT EXISTS enrollments (studentId TEXT, subjectId TEXT, PRIMARY KEY(studentId, subjectId), FOREIGN KEY(studentId) REFERENCES students(id), FOREIGN KEY(subjectId) REFERENCES subjects(id))`);
   db.run(`CREATE TABLE IF NOT EXISTS grades (studentId TEXT, evaluationId TEXT, score REAL, PRIMARY KEY(studentId, evaluationId), FOREIGN KEY(studentId) REFERENCES students(id), FOREIGN KEY(evaluationId) REFERENCES evaluations(id))`);
 };
 
+const parseResults = (stmt: any) => {
+    const results = [];
+    while (stmt.step()) results.push(stmt.getAsObject());
+    stmt.free();
+    return results;
+}
+
 const migrateFromLocalStorage = () => {
   console.log("Checking for data to migrate from localStorage...");
   try {
     const oldStudents = JSON.parse(window.localStorage.getItem('students') || '[]') as Student[];
-    const oldSubjects = JSON.parse(window.localStorage.getItem('subjects') || '[]') as Omit<Subject, 'period'>[];
+    const oldSubjects = JSON.parse(window.localStorage.getItem('subjects') || '[]') as Omit<Subject, 'period' | 'ordering'>[];
     const oldEvaluations = JSON.parse(window.localStorage.getItem('evaluations') || '[]') as Evaluation[];
     const oldGrades = JSON.parse(window.localStorage.getItem('grades') || '[]') as Grade[];
     const oldEnrollments = JSON.parse(window.localStorage.getItem('enrollments') || '[]') as Enrollment[];
@@ -39,7 +47,7 @@ const migrateFromLocalStorage = () => {
     console.log("Migrating data...");
     db.exec("BEGIN TRANSACTION;");
     oldStudents.forEach((s) => db.run("INSERT OR IGNORE INTO students VALUES (?, ?, ?)", [s.id, s.name, s.email]));
-    oldSubjects.forEach((s) => db.run("INSERT OR IGNORE INTO subjects VALUES (?, ?, ?)", [s.id, s.name, 'Sin Período']));
+    oldSubjects.forEach((s, index) => db.run("INSERT OR IGNORE INTO subjects VALUES (?, ?, ?, ?)", [s.id, s.name, 'Sin Período', index]));
     oldEvaluations.forEach((e) => db.run("INSERT OR IGNORE INTO evaluations VALUES (?, ?, ?, ?, ?)", [e.id, e.subjectId, e.corte, e.name, e.percentage]));
     oldEnrollments.forEach((e) => db.run("INSERT OR IGNORE INTO enrollments VALUES (?, ?)", [e.studentId, e.subjectId]));
     oldGrades.forEach((g) => db.run("INSERT OR IGNORE INTO grades VALUES (?, ?, ?)", [g.studentId, g.evaluationId, g.score]));
@@ -66,13 +74,29 @@ const initDB = async () => {
   }
   
   createSchema();
-  // Simple migration for adding period column if it doesn't exist
+  // Migration for adding 'period' column if it doesn't exist
   try {
     db.exec("SELECT period FROM subjects LIMIT 1");
   } catch (e) {
       console.log("Applying migration: Adding 'period' column to subjects.");
       db.exec("ALTER TABLE subjects ADD COLUMN period TEXT NOT NULL DEFAULT 'Sin Período'");
       saveDB();
+  }
+  
+  // Migration for adding 'ordering' column if it doesn't exist
+  try {
+    db.exec("SELECT ordering FROM subjects LIMIT 1");
+  } catch(e) {
+      console.log("Applying migration: Adding 'ordering' column to subjects.");
+      db.exec("ALTER TABLE subjects ADD COLUMN ordering INTEGER");
+      const subjectsToOrder = parseResults(db.prepare("SELECT id FROM subjects ORDER BY period DESC, name ASC"));
+      db.exec("BEGIN TRANSACTION;");
+      const stmt = db.prepare("UPDATE subjects SET ordering = ? WHERE id = ?");
+      subjectsToOrder.forEach((s, index) => { stmt.run([index, s.id]); });
+      stmt.free();
+      db.exec("COMMIT;");
+      saveDB();
+      console.log(`Assigned initial order to ${subjectsToOrder.length} subjects.`);
   }
 
   if (!window.localStorage.getItem(MIGRATED_KEY)) {
@@ -85,16 +109,39 @@ const saveDB = () => {
   window.localStorage.setItem(DB_KEY, data.toString());
 };
 
-const parseResults = (stmt: any) => {
-    const results = [];
-    while (stmt.step()) results.push(stmt.getAsObject());
-    stmt.free();
-    return results;
-}
-
-const dbGetSubjects = async (): Promise<Subject[]> => { await initDB(); return parseResults(db.prepare("SELECT * FROM subjects")) as Subject[]; };
-const dbAddSubject = async (name: string, period: string): Promise<Subject> => { await initDB(); const s = { id: `subject-${Date.now()}`, name, period }; db.run("INSERT INTO subjects (id, name, period) VALUES (?, ?, ?)", [s.id, s.name, s.period]); saveDB(); return s; };
+const dbGetSubjects = async (): Promise<Subject[]> => { await initDB(); return parseResults(db.prepare("SELECT * FROM subjects ORDER BY ordering ASC")) as Subject[]; };
+const dbAddSubject = async (name: string, period: string): Promise<Subject> => { 
+    await initDB(); 
+    const maxOrderStmt = db.prepare("SELECT MAX(ordering) as max_order FROM subjects");
+    let maxOrder = -1;
+    if (maxOrderStmt.step()) {
+        const result = maxOrderStmt.getAsObject();
+        maxOrder = result.max_order !== null ? result.max_order : -1;
+    }
+    maxOrderStmt.free();
+    const newOrdering = maxOrder + 1;
+    const s = { id: `subject-${Date.now()}`, name, period, ordering: newOrdering }; 
+    db.run("INSERT INTO subjects (id, name, period, ordering) VALUES (?, ?, ?, ?)", [s.id, s.name, s.period, s.ordering]); 
+    saveDB(); 
+    return s; 
+};
 const dbUpdateSubject = async (subject: Subject): Promise<void> => { await initDB(); db.run("UPDATE subjects SET name = ?, period = ? WHERE id = ?", [subject.name, subject.period, subject.id]); saveDB(); };
+const dbUpdateSubjectsOrder = async (subjects: Subject[]): Promise<void> => {
+    await initDB();
+    db.exec("BEGIN TRANSACTION;");
+    try {
+        const stmt = db.prepare("UPDATE subjects SET ordering = ? WHERE id = ?");
+        subjects.forEach((subject, index) => {
+            stmt.run([index, subject.id]);
+        });
+        stmt.free();
+        db.exec("COMMIT;");
+        saveDB();
+    } catch(e) {
+        console.error("Failed to update subject order:", e);
+        db.exec("ROLLBACK;");
+    }
+};
 const dbGetEnrolledStudentsForSubject = async (subjectId: string): Promise<Student[]> => { await initDB(); const stmt = db.prepare(`SELECT s.* FROM students s JOIN enrollments e ON s.id = e.studentId WHERE e.subjectId = ?`); stmt.bind([subjectId]); return parseResults(stmt) as Student[]; };
 const dbGetEvaluationsForSubject = async (subjectId: string): Promise<Evaluation[]> => { await initDB(); const stmt = db.prepare("SELECT * FROM evaluations WHERE subjectId = ?"); stmt.bind([subjectId]); return parseResults(stmt) as Evaluation[]; };
 const dbGetGradesForSubject = async (subjectId: string): Promise<Grade[]> => { await initDB(); const stmt = db.prepare(`SELECT g.* FROM grades g JOIN evaluations e ON g.evaluationId = e.id WHERE e.subjectId = ?`); stmt.bind([subjectId]); return (parseResults(stmt) as any[]).map(r => ({ ...r, score: r.score === undefined ? null : r.score })) as Grade[]; };
@@ -130,16 +177,8 @@ const dbUnenrollStudent = async (studentId: string, subjectId: string) => {
     await initDB();
     db.exec("BEGIN TRANSACTION;");
     try {
-        // Usar una subconsulta para encontrar los IDs de evaluación relevantes
-        db.run(`
-            DELETE FROM grades 
-            WHERE studentId = ? 
-            AND evaluationId IN (SELECT id FROM evaluations WHERE subjectId = ?)
-        `, [studentId, subjectId]);
-        
-        // Eliminar la matrícula
+        db.run(`DELETE FROM grades WHERE studentId = ? AND evaluationId IN (SELECT id FROM evaluations WHERE subjectId = ?)`, [studentId, subjectId]);
         db.run("DELETE FROM enrollments WHERE studentId = ? AND subjectId = ?", [studentId, subjectId]);
-        
         db.exec("COMMIT;");
         saveDB();
     } catch(e) {
@@ -161,12 +200,7 @@ const dbAddEvaluation = async (evaluationData: Omit<Evaluation, 'id' | 'subjectI
     saveDB();
 };
 
-const dbUpdateEvaluation = async (evaluation: Evaluation) => {
-    await initDB();
-    db.run("UPDATE evaluations SET name = ?, percentage = ?, corte = ? WHERE id = ?", [evaluation.name, evaluation.percentage, evaluation.corte, evaluation.id]);
-    saveDB();
-};
-
+const dbUpdateEvaluation = async (evaluation: Evaluation) => { await initDB(); db.run("UPDATE evaluations SET name = ?, percentage = ?, corte = ? WHERE id = ?", [evaluation.name, evaluation.percentage, evaluation.corte, evaluation.id]); saveDB(); };
 const dbDeleteEvaluation = async (evaluationId: string) => {
     await initDB();
     db.exec("BEGIN TRANSACTION;");
@@ -180,7 +214,6 @@ const dbDeleteEvaluation = async (evaluationId: string) => {
         db.exec("ROLLBACK;");
     }
 };
-
 const dbUpdateGrade = async (studentId: string, evaluationId: string, score: number | null) => { await initDB(); db.run("UPDATE grades SET score = ? WHERE studentId = ? AND evaluationId = ?", [score, studentId, evaluationId]); saveDB(); };
 // ============== DB LOGIC END ==============
 
@@ -191,6 +224,9 @@ function App() {
   const [newSubjectPeriod, setNewSubjectPeriod] = useState('');
   const [editingSubject, setEditingSubject] = useState<Subject | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
+  const draggedSubjectId = useRef<string | null>(null);
 
   const [currentStudents, setCurrentStudents] = useState<Student[]>([]);
   const [currentEvaluations, setCurrentEvaluations] = useState<Evaluation[]>([]);
@@ -235,9 +271,57 @@ function App() {
   const handleUpdateSubject = async (subjectToUpdate: Subject) => {
     if (!subjectToUpdate.name.trim() || !subjectToUpdate.period.trim()) return;
     await dbUpdateSubject(subjectToUpdate);
-    setSubjects(prev => prev.map(s => s.id === subjectToUpdate.id ? subjectToUpdate : s));
+    setSubjects(prev => prev.map(s => s.id === subjectToUpdate.id ? { ...s, name: subjectToUpdate.name, period: subjectToUpdate.period } : s));
     setEditingSubject(null);
   };
+    
+  // Drag and Drop Handlers
+  const handleDragStart = (e: React.DragEvent<HTMLDivElement>, id: string) => {
+    draggedSubjectId.current = id;
+    setDraggingId(id);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDragEnter = (e: React.DragEvent<HTMLDivElement>, id: string) => {
+    e.preventDefault();
+    if (id !== draggedSubjectId.current) {
+      setDragOverId(id);
+    }
+  };
+    
+  const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setDragOverId(null);
+  };
+    
+  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+  };
+
+  const handleDrop = async (e: React.DragEvent<HTMLDivElement>, targetId: string) => {
+    e.preventDefault();
+    const draggedId = draggedSubjectId.current;
+    if (!draggedId || draggedId === targetId) {
+      return;
+    }
+    const draggedIndex = subjects.findIndex(s => s.id === draggedId);
+    const targetIndex = subjects.findIndex(s => s.id === targetId);
+    if (draggedIndex === -1 || targetIndex === -1) return;
+
+    const newSubjects = [...subjects];
+    const [draggedItem] = newSubjects.splice(draggedIndex, 1);
+    newSubjects.splice(targetIndex, 0, draggedItem);
+    
+    setSubjects(newSubjects);
+    await dbUpdateSubjectsOrder(newSubjects);
+  };
+
+  const handleDragEnd = () => {
+    draggedSubjectId.current = null;
+    setDraggingId(null);
+    setDragOverId(null);
+  };
+
 
   const handleEnrollStudents = async (studentsToEnroll: Student[]) => {
     if (!selectedSubjectId) return;
@@ -263,7 +347,6 @@ function App() {
   const handleUnenrollStudent = async (studentId: string) => {
       if (!selectedSubjectId) return;
       await dbUnenrollStudent(studentId, selectedSubjectId);
-      // Recargar los datos para asegurar la consistencia de la UI
       const updatedStudents = await dbGetEnrolledStudentsForSubject(selectedSubjectId);
       const updatedGrades = await dbGetGradesForSubject(selectedSubjectId);
       setCurrentStudents(updatedStudents);
@@ -312,12 +395,9 @@ function App() {
   const selectedSubject = useMemo(() => subjects.find(s => s.id === selectedSubjectId), [subjects, selectedSubjectId]);
   
   const subjectsByPeriod = useMemo(() => {
-    const sortedSubjects = [...subjects].sort((a, b) => b.period.localeCompare(a.period) || a.name.localeCompare(b.name));
-    return sortedSubjects.reduce((acc, subject) => {
+    return subjects.reduce((acc, subject) => {
       const period = subject.period || 'Sin Período';
-      if (!acc[period]) {
-        acc[period] = [];
-      }
+      if (!acc[period]) acc[period] = [];
       acc[period].push(subject);
       return acc;
     }, {} as Record<string, Subject[]>);
@@ -380,32 +460,43 @@ function App() {
       </div>
 
       <div className="space-y-8">
-        {Object.entries(subjectsByPeriod).length > 0 ? (
-          // FIX: Explicitly cast the result of Object.entries to resolve type inference issue.
-          (Object.entries(subjectsByPeriod) as [string, Subject[]][]).map(([period, subjectList]) => (
-            <div key={period}>
-              <h2 className="text-2xl font-bold mb-4 text-gray-800 dark:text-gray-100">{period}</h2>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                {subjectList.map(subject => (
-                  <div
-                    key={subject.id}
-                    onClick={() => setSelectedSubjectId(subject.id)}
-                    className="bg-white dark:bg-gray-800 rounded-lg shadow p-6 cursor-pointer hover:shadow-lg hover:-translate-y-1 transition-all duration-300 flex flex-col items-center text-center relative"
-                  >
-                    <button 
-                      onClick={(e) => { e.stopPropagation(); setEditingSubject(subject); }}
-                      className="absolute top-2 right-2 p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700"
-                      aria-label="Editar materia"
+        {Object.keys(subjectsByPeriod).length > 0 ? (
+          Object.keys(subjectsByPeriod).map((period) => {
+            const subjectList = subjectsByPeriod[period];
+            return (
+              <div key={period}>
+                <h2 className="text-2xl font-bold mb-4 text-gray-800 dark:text-gray-100">{period}</h2>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                  {subjectList.map(subject => (
+                    <div
+                      key={subject.id}
+                      draggable
+                      onDragStart={(e) => handleDragStart(e, subject.id)}
+                      onDragEnter={(e) => handleDragEnter(e, subject.id)}
+                      onDragLeave={handleDragLeave}
+                      onDragOver={handleDragOver}
+                      onDrop={(e) => handleDrop(e, subject.id)}
+                      onDragEnd={handleDragEnd}
+                      onClick={() => setSelectedSubjectId(subject.id)}
+                      className={`bg-white dark:bg-gray-800 rounded-lg shadow p-6 cursor-grab hover:shadow-lg hover:-translate-y-1 transition-all duration-300 flex flex-col items-center text-center relative
+                                ${draggingId === subject.id ? 'opacity-40' : 'opacity-100'}
+                                ${dragOverId === subject.id ? 'ring-2 ring-blue-500 ring-offset-2 dark:ring-offset-gray-800' : ''}`}
                     >
-                        <PencilIcon className="w-4 h-4"/>
-                    </button>
-                    <BookOpenIcon className="w-12 h-12 text-blue-500 mb-4" />
-                    <h4 className="text-xl font-semibold text-gray-800 dark:text-gray-100">{subject.name}</h4>
-                  </div>
-                ))}
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); setEditingSubject(subject); }}
+                        className="absolute top-2 right-2 p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700"
+                        aria-label="Editar materia"
+                      >
+                          <PencilIcon className="w-4 h-4"/>
+                      </button>
+                      <BookOpenIcon className="w-12 h-12 text-blue-500 mb-4" />
+                      <h4 className="text-xl font-semibold text-gray-800 dark:text-gray-100">{subject.name}</h4>
+                    </div>
+                  ))}
+                </div>
               </div>
-            </div>
-          ))
+            )
+          })
         ) : (
           <div className="text-center py-10 bg-white dark:bg-gray-800 rounded-lg shadow">
             <p className="text-gray-500 dark:text-gray-400">Aún no has agregado ninguna materia.</p>

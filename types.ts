@@ -1,3 +1,4 @@
+
 export type Student = {
   id: string; // Cedula
   name: string;
@@ -22,6 +23,7 @@ export type Subject = {
   id: string;
   name: string;
   period: string;
+  ordering: number;
 };
 
 export type Enrollment = {

@@ -25,11 +25,11 @@ const StudentImport: React.FC<StudentImportProps> = ({ onStudentsLoaded }) => {
       }
       
       const students: Student[] = lines.slice(1).map((line, index) => {
-        const [id, name, email] = line.split(',').map(item => item.trim());
-        if (!id || !name || !email) {
-          throw new Error(`Error en la línea ${index + 2}: Faltan datos. El formato debe ser cedula,nombre,correo.`);
+        const [id, name] = line.split(',').map(item => item.trim());
+        if (!id || !name) {
+          throw new Error(`Error en la línea ${index + 2}: Faltan datos. El formato debe ser cedula,nombre.`);
         }
-        return { id, name, email };
+        return { id, name };
       });
       
       onStudentsLoaded(students);
@@ -47,10 +47,11 @@ const StudentImport: React.FC<StudentImportProps> = ({ onStudentsLoaded }) => {
   return (
     <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-md">
       <h3 className="text-lg font-semibold mb-3 text-gray-800 dark:text-gray-100">Cargar Estudiantes (CSV)</h3>
-      <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">El archivo debe tener el formato: <code className="bg-gray-200 dark:bg-gray-700 p-1 rounded text-xs">cedula,nombre,correo</code> con una cabecera.</p>
+      <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">El archivo debe tener el formato: <code className="bg-gray-200 dark:bg-gray-700 p-1 rounded text-xs">cedula,nombre</code> con una cabecera.</p>
       <input
         type="file"
         accept=".csv"
+        title="Seleccionar archivo CSV de estudiantes"
         onChange={handleFileChange}
         className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
         ref={fileInputRef}

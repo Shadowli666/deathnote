@@ -1,221 +1,28 @@
 
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Student, Subject, Evaluation, Grade, Enrollment } from './types';
+import { Student, Subject, Evaluation, Grade } from './types';
 import SubjectView from './components/SubjectView';
 import Modal from './components/Modal';
-import { PlusCircleIcon, BookOpenIcon, PencilIcon } from './components/Icons';
-
-// This will be defined in index.html by sql.js
-declare function initSqlJs(config: any): Promise<any>;
-
-// ============== DB LOGIC START ==============
-let db: any = null;
-const DB_KEY = 'sqlite-db';
-const MIGRATED_KEY = 'data-migrated-to-sqlite';
-
-const createSchema = () => {
-  if (!db) return;
-  db.run(`CREATE TABLE IF NOT EXISTS students (id TEXT PRIMARY KEY, name TEXT, email TEXT)`);
-  db.run(`CREATE TABLE IF NOT EXISTS subjects (id TEXT PRIMARY KEY, name TEXT, period TEXT, ordering INTEGER)`);
-  db.run(`CREATE TABLE IF NOT EXISTS evaluations (id TEXT PRIMARY KEY, subjectId TEXT, corte INTEGER, name TEXT, percentage REAL, FOREIGN KEY(subjectId) REFERENCES subjects(id))`);
-  db.run(`CREATE TABLE IF NOT EXISTS enrollments (studentId TEXT, subjectId TEXT, PRIMARY KEY(studentId, subjectId), FOREIGN KEY(studentId) REFERENCES students(id), FOREIGN KEY(subjectId) REFERENCES subjects(id))`);
-  db.run(`CREATE TABLE IF NOT EXISTS grades (studentId TEXT, evaluationId TEXT, score REAL, PRIMARY KEY(studentId, evaluationId), FOREIGN KEY(studentId) REFERENCES students(id), FOREIGN KEY(evaluationId) REFERENCES evaluations(id))`);
-};
-
-const parseResults = (stmt: any) => {
-    const results = [];
-    while (stmt.step()) results.push(stmt.getAsObject());
-    stmt.free();
-    return results;
-}
-
-const migrateFromLocalStorage = () => {
-  console.log("Checking for data to migrate from localStorage...");
-  try {
-    const oldStudents = JSON.parse(window.localStorage.getItem('students') || '[]') as Student[];
-    const oldSubjects = JSON.parse(window.localStorage.getItem('subjects') || '[]') as Omit<Subject, 'period' | 'ordering'>[];
-    const oldEvaluations = JSON.parse(window.localStorage.getItem('evaluations') || '[]') as Evaluation[];
-    const oldGrades = JSON.parse(window.localStorage.getItem('grades') || '[]') as Grade[];
-    const oldEnrollments = JSON.parse(window.localStorage.getItem('enrollments') || '[]') as Enrollment[];
-    
-    if (oldSubjects.length === 0 && oldStudents.length === 0) {
-        console.log("No data to migrate.");
-        window.localStorage.setItem(MIGRATED_KEY, 'true');
-        return;
-    }
-
-    console.log("Migrating data...");
-    db.exec("BEGIN TRANSACTION;");
-    oldStudents.forEach((s) => db.run("INSERT OR IGNORE INTO students VALUES (?, ?, ?)", [s.id, s.name, s.email]));
-    oldSubjects.forEach((s, index) => db.run("INSERT OR IGNORE INTO subjects VALUES (?, ?, ?, ?)", [s.id, s.name, 'Sin Período', index]));
-    oldEvaluations.forEach((e) => db.run("INSERT OR IGNORE INTO evaluations VALUES (?, ?, ?, ?, ?)", [e.id, e.subjectId, e.corte, e.name, e.percentage]));
-    oldEnrollments.forEach((e) => db.run("INSERT OR IGNORE INTO enrollments VALUES (?, ?)", [e.studentId, e.subjectId]));
-    oldGrades.forEach((g) => db.run("INSERT OR IGNORE INTO grades VALUES (?, ?, ?)", [g.studentId, g.evaluationId, g.score]));
-    db.exec("COMMIT;");
-    
-    console.log("Migration complete.");
-    window.localStorage.setItem(MIGRATED_KEY, 'true');
-    ['students', 'subjects', 'evaluations', 'grades', 'enrollments'].forEach(key => window.localStorage.removeItem(key));
-  } catch (e) {
-    console.error("Migration failed:", e);
-    db.exec("ROLLBACK;");
-  }
-};
-
-const initDB = async () => {
-  if (db) return;
-  const SQL = await initSqlJs({ locateFile: file => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/${file}` });
-  const dbFromStorage = window.localStorage.getItem(DB_KEY);
-  if (dbFromStorage) {
-    const dbArray = dbFromStorage.split(',').map(s => parseInt(s, 10));
-    db = new SQL.Database(new Uint8Array(dbArray));
-  } else {
-    db = new SQL.Database();
-  }
-  
-  createSchema();
-  // Migration for adding 'period' column if it doesn't exist
-  try {
-    db.exec("SELECT period FROM subjects LIMIT 1");
-  } catch (e) {
-      console.log("Applying migration: Adding 'period' column to subjects.");
-      db.exec("ALTER TABLE subjects ADD COLUMN period TEXT NOT NULL DEFAULT 'Sin Período'");
-      saveDB();
-  }
-  
-  // Migration for adding 'ordering' column if it doesn't exist
-  try {
-    db.exec("SELECT ordering FROM subjects LIMIT 1");
-  } catch(e) {
-      console.log("Applying migration: Adding 'ordering' column to subjects.");
-      db.exec("ALTER TABLE subjects ADD COLUMN ordering INTEGER");
-      const subjectsToOrder = parseResults(db.prepare("SELECT id FROM subjects ORDER BY period DESC, name ASC"));
-      db.exec("BEGIN TRANSACTION;");
-      const stmt = db.prepare("UPDATE subjects SET ordering = ? WHERE id = ?");
-      subjectsToOrder.forEach((s, index) => { stmt.run([index, s.id]); });
-      stmt.free();
-      db.exec("COMMIT;");
-      saveDB();
-      console.log(`Assigned initial order to ${subjectsToOrder.length} subjects.`);
-  }
-
-  if (!window.localStorage.getItem(MIGRATED_KEY)) {
-      migrateFromLocalStorage();
-  }
-};
-
-const saveDB = () => {
-  const data = db.export();
-  window.localStorage.setItem(DB_KEY, data.toString());
-};
-
-const dbGetSubjects = async (): Promise<Subject[]> => { await initDB(); return parseResults(db.prepare("SELECT * FROM subjects ORDER BY ordering ASC")) as Subject[]; };
-const dbAddSubject = async (name: string, period: string): Promise<Subject> => { 
-    await initDB(); 
-    const maxOrderStmt = db.prepare("SELECT MAX(ordering) as max_order FROM subjects");
-    let maxOrder = -1;
-    if (maxOrderStmt.step()) {
-        const result = maxOrderStmt.getAsObject();
-        maxOrder = result.max_order !== null ? result.max_order : -1;
-    }
-    maxOrderStmt.free();
-    const newOrdering = maxOrder + 1;
-    const s = { id: `subject-${Date.now()}`, name, period, ordering: newOrdering }; 
-    db.run("INSERT INTO subjects (id, name, period, ordering) VALUES (?, ?, ?, ?)", [s.id, s.name, s.period, s.ordering]); 
-    saveDB(); 
-    return s; 
-};
-const dbUpdateSubject = async (subject: Subject): Promise<void> => { await initDB(); db.run("UPDATE subjects SET name = ?, period = ? WHERE id = ?", [subject.name, subject.period, subject.id]); saveDB(); };
-const dbUpdateSubjectsOrder = async (subjects: Subject[]): Promise<void> => {
-    await initDB();
-    db.exec("BEGIN TRANSACTION;");
-    try {
-        const stmt = db.prepare("UPDATE subjects SET ordering = ? WHERE id = ?");
-        subjects.forEach((subject, index) => {
-            stmt.run([index, subject.id]);
-        });
-        stmt.free();
-        db.exec("COMMIT;");
-        saveDB();
-    } catch(e) {
-        console.error("Failed to update subject order:", e);
-        db.exec("ROLLBACK;");
-    }
-};
-const dbGetEnrolledStudentsForSubject = async (subjectId: string): Promise<Student[]> => { await initDB(); const stmt = db.prepare(`SELECT s.* FROM students s JOIN enrollments e ON s.id = e.studentId WHERE e.subjectId = ?`); stmt.bind([subjectId]); return parseResults(stmt) as Student[]; };
-const dbGetEvaluationsForSubject = async (subjectId: string): Promise<Evaluation[]> => { await initDB(); const stmt = db.prepare("SELECT * FROM evaluations WHERE subjectId = ?"); stmt.bind([subjectId]); return parseResults(stmt) as Evaluation[]; };
-const dbGetGradesForSubject = async (subjectId: string): Promise<Grade[]> => { await initDB(); const stmt = db.prepare(`SELECT g.* FROM grades g JOIN evaluations e ON g.evaluationId = e.id WHERE e.subjectId = ?`); stmt.bind([subjectId]); return (parseResults(stmt) as any[]).map(r => ({ ...r, score: r.score === undefined ? null : r.score })) as Grade[]; };
-const dbAddOrUpdateStudents = async (studentsToAdd: Student[]) => { await initDB(); const stmt = db.prepare("INSERT OR REPLACE INTO students (id, name, email) VALUES (?, ?, ?)"); studentsToAdd.forEach(s => stmt.run([s.id, s.name, s.email])); stmt.free(); };
-
-const dbEnrollStudents = async (studentsToEnroll: Student[], subjectId: string) => {
-    await initDB();
-    await dbAddOrUpdateStudents(studentsToEnroll);
-    const enrollStmt = db.prepare("INSERT OR IGNORE INTO enrollments (studentId, subjectId) VALUES (?, ?)");
-    studentsToEnroll.forEach(s => enrollStmt.run([s.id, subjectId]));
-    enrollStmt.free();
-    const subjectEvaluations = await dbGetEvaluationsForSubject(subjectId);
-    if (subjectEvaluations.length > 0) {
-        const gradeStmt = db.prepare("INSERT OR IGNORE INTO grades (studentId, evaluationId, score) VALUES (?, ?, ?)");
-        studentsToEnroll.forEach(student => subjectEvaluations.forEach(ev => gradeStmt.run([student.id, ev.id, null])));
-        gradeStmt.free();
-    }
-    saveDB();
-};
-
-const dbEnrollStudent = async (studentToEnroll: Student, subjectId: string): Promise<boolean> => {
-    await initDB();
-    const checkStmt = db.prepare("SELECT 1 FROM enrollments WHERE studentId = ? AND subjectId = ?");
-    checkStmt.bind([studentToEnroll.id, subjectId]);
-    const isEnrolled = checkStmt.step();
-    checkStmt.free();
-    if(isEnrolled) return false;
-    await dbEnrollStudents([studentToEnroll], subjectId);
-    return true;
-};
-
-const dbUnenrollStudent = async (studentId: string, subjectId: string) => {
-    await initDB();
-    db.exec("BEGIN TRANSACTION;");
-    try {
-        db.run(`DELETE FROM grades WHERE studentId = ? AND evaluationId IN (SELECT id FROM evaluations WHERE subjectId = ?)`, [studentId, subjectId]);
-        db.run("DELETE FROM enrollments WHERE studentId = ? AND subjectId = ?", [studentId, subjectId]);
-        db.exec("COMMIT;");
-        saveDB();
-    } catch(e) {
-        console.error("Failed to unenroll student:", e);
-        db.exec("ROLLBACK;");
-    }
-};
-
-const dbAddEvaluation = async (evaluationData: Omit<Evaluation, 'id' | 'subjectId'>, subjectId: string) => {
-    await initDB();
-    const newEval = { ...evaluationData, id: `eval-${Date.now()}`, subjectId };
-    db.run("INSERT INTO evaluations (id, subjectId, corte, name, percentage) VALUES (?, ?, ?, ?, ?)", [newEval.id, newEval.subjectId, newEval.corte, newEval.name, newEval.percentage]);
-    const enrolledStudents = await dbGetEnrolledStudentsForSubject(subjectId);
-    if (enrolledStudents.length > 0) {
-        const gradeStmt = db.prepare("INSERT INTO grades (studentId, evaluationId, score) VALUES (?, ?, ?)");
-        enrolledStudents.forEach(student => gradeStmt.run([student.id, newEval.id, null]));
-        gradeStmt.free();
-    }
-    saveDB();
-};
-
-const dbUpdateEvaluation = async (evaluation: Evaluation) => { await initDB(); db.run("UPDATE evaluations SET name = ?, percentage = ?, corte = ? WHERE id = ?", [evaluation.name, evaluation.percentage, evaluation.corte, evaluation.id]); saveDB(); };
-const dbDeleteEvaluation = async (evaluationId: string) => {
-    await initDB();
-    db.exec("BEGIN TRANSACTION;");
-    try {
-        db.run("DELETE FROM grades WHERE evaluationId = ?", [evaluationId]);
-        db.run("DELETE FROM evaluations WHERE id = ?", [evaluationId]);
-        db.exec("COMMIT;");
-        saveDB();
-    } catch(e) {
-        console.error("Failed to delete evaluation:", e);
-        db.exec("ROLLBACK;");
-    }
-};
-const dbUpdateGrade = async (studentId: string, evaluationId: string, score: number | null) => { await initDB(); db.run("UPDATE grades SET score = ? WHERE studentId = ? AND evaluationId = ?", [score, studentId, evaluationId]); saveDB(); };
-// ============== DB LOGIC END ==============
+import { PlusCircleIcon, BookOpenIcon, PencilIcon, DownloadIcon } from './components/Icons';
+import {
+  dbAddEvaluation,
+  dbAddSubject,
+  dbDeleteEvaluation,
+  dbEnrollStudent,
+  dbEnrollStudents,
+  dbGetEnrolledStudentsForSubject,
+  dbGetEvaluationsForSubject,
+  dbGetGradesForSubject,
+  dbGetSubjects,
+  dbUnenrollStudent,
+  dbUpdateEvaluation,
+  dbUpdateGrade,
+  dbUpdateStudent,
+  dbUpdateSubject,
+  dbUpdateSubjectsOrder,
+  ensureServerDataMigration,
+  exportDatabaseFile,
+} from './services/dbApi';
 
 function App() {
   const [subjects, setSubjects] = useState<Subject[]>([]);
@@ -234,10 +41,15 @@ function App() {
 
   useEffect(() => {
     const loadInitialData = async () => {
-      await initDB();
-      const initialSubjects = await dbGetSubjects();
-      setSubjects(initialSubjects);
-      setIsLoading(false);
+      try {
+        await ensureServerDataMigration();
+        const initialSubjects = await dbGetSubjects();
+        setSubjects(initialSubjects);
+      } catch (error) {
+        console.error("Error loading initial data:", error);
+      } finally {
+        setIsLoading(false);
+      }
     };
     loadInitialData();
   }, []);
@@ -353,6 +165,17 @@ function App() {
       setCurrentGrades(updatedGrades);
   };
 
+    const handleUpdateStudent = async (originalId: string, student: Student): Promise<boolean> => {
+      if (!selectedSubjectId) return false;
+      const success = await dbUpdateStudent(originalId, student);
+      if (!success) return false;
+      const updatedStudents = await dbGetEnrolledStudentsForSubject(selectedSubjectId);
+      const updatedGrades = await dbGetGradesForSubject(selectedSubjectId);
+      setCurrentStudents(updatedStudents);
+      setCurrentGrades(updatedGrades);
+      return true;
+    };
+
   const handleAddEvaluation = async (evaluationData: Omit<Evaluation, 'id' | 'subjectId'>) => {
     if (!selectedSubjectId) return;
     await dbAddEvaluation(evaluationData, selectedSubjectId);
@@ -420,6 +243,7 @@ function App() {
         onEnrollStudent={handleEnrollStudent}
         onEnrollStudents={handleEnrollStudents}
         onDeleteEvaluation={handleDeleteEvaluation}
+        onUpdateStudent={handleUpdateStudent}
         onUnenrollStudent={handleUnenrollStudent}
         onBack={() => setSelectedSubjectId(null)}
       />
@@ -428,9 +252,19 @@ function App() {
 
   return (
     <div className="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8">
-      <header className="mb-8">
+      <header className="mb-8 relative">
         <h1 className="text-4xl font-bold text-center text-gray-800 dark:text-gray-100">Evaluador de Notas Pro</h1>
         <p className="text-center text-gray-500 dark:text-gray-400 mt-2">Gestiona las calificaciones de tus estudiantes de forma sencilla y eficaz.</p>
+        <div className="absolute top-0 right-0">
+          <button 
+            onClick={exportDatabaseFile}
+            className="text-xs text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1"
+            title="Exportar base de datos para DBeaver"
+          >
+            <DownloadIcon className="w-4 h-4" />
+            Exportar .sqlite
+          </button>
+        </div>
       </header>
 
       <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-md mb-8">
@@ -533,12 +367,12 @@ const EditSubjectModal: React.FC<EditSubjectModalProps> = ({ subject, onClose, o
         <Modal isOpen={true} onClose={onClose} title="Editar Materia">
             <div className="space-y-4">
                 <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Nombre de la Materia</label>
-                    <input type="text" value={name} onChange={e => setName(e.target.value)} className="mt-1 block w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"/>
+                    <label htmlFor="edit-subject-name" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Nombre de la Materia</label>
+                    <input id="edit-subject-name" title="Nombre de la materia" placeholder="Ej: Matemáticas I" type="text" value={name} onChange={e => setName(e.target.value)} className="mt-1 block w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"/>
                 </div>
                 <div>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Período Académico</label>
-                    <input type="text" value={period} onChange={e => setPeriod(e.target.value)} className="mt-1 block w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"/>
+                    <label htmlFor="edit-subject-period" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Período Académico</label>
+                    <input id="edit-subject-period" title="Período académico" placeholder="Ej: 2026-1" type="text" value={period} onChange={e => setPeriod(e.target.value)} className="mt-1 block w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"/>
                 </div>
                 <div className="flex justify-end gap-2 pt-2">
                     <button onClick={onClose} className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 dark:bg-gray-600 dark:text-gray-100 dark:hover:bg-gray-500">Cancelar</button>

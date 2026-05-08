@@ -1,16 +1,17 @@
 import React, { useMemo, useCallback } from 'react';
 import { Student, Evaluation, Grade } from '../types';
-import { TrashIcon } from './Icons';
+import { TrashIcon, PencilIcon } from './Icons';
 
 interface GradeTableProps {
   students: Student[];
   evaluations: Evaluation[];
   grades: Grade[];
   onUpdateGrade: (studentId: string, evaluationId: string, score: number | null) => void;
+  onEditStudent: (student: Student) => void;
   onUnenrollStudent: (studentId: string) => void;
 }
 
-const GradeTable: React.FC<GradeTableProps> = ({ students, evaluations, grades, onUpdateGrade, onUnenrollStudent }) => {
+const GradeTable: React.FC<GradeTableProps> = ({ students, evaluations, grades, onUpdateGrade, onEditStudent, onUnenrollStudent }) => {
   const evaluationsByCorte = useMemo(() => {
     const cortes: { [key in 1 | 2 | 3]: Evaluation[] } = { 1: [], 2: [], 3: [] };
     evaluations.forEach(ev => cortes[ev.corte].push(ev));
@@ -95,6 +96,13 @@ const GradeTable: React.FC<GradeTableProps> = ({ students, evaluations, grades, 
                 <td className="p-3 font-medium text-gray-700 dark:text-gray-200 sticky left-0 bg-white dark:bg-gray-800 z-10">{student.name}</td>
                 <td className="p-3">{student.id}</td>
                 <td className="p-3">
+                  <button
+                    onClick={() => onEditStudent(student)}
+                    className="p-1 text-gray-500 hover:text-yellow-600 dark:hover:text-yellow-400 transition-colors"
+                    aria-label={`Editar a ${student.name}`}
+                  >
+                    <PencilIcon className="w-5 h-5" />
+                  </button>
                     <button
                         onClick={() => {
                             if (window.confirm(`¿Estás seguro de que deseas eliminar a ${student.name} de esta materia? Se borrarán todas sus calificaciones.`)) {
@@ -114,6 +122,8 @@ const GradeTable: React.FC<GradeTableProps> = ({ students, evaluations, grades, 
                             return (
                                 <td key={`${student.id}-${ev.id}`} className="p-1">
                                     <input
+                                      title={`Nota de ${student.name} en ${ev.name}`}
+                                      placeholder="0-20"
                                         type="number"
                                         min="0"
                                         max="20"

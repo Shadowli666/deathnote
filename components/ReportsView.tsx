@@ -1,10 +1,33 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import { Chart, Registerable } from 'chart.js';
+import { jsPDF } from 'jspdf';
+import html2canvas from 'html2canvas';
 import { Subject, Student, Evaluation, Grade } from '../types';
 import { DownloadIcon } from './Icons';
 
-declare var Chart: any;
-declare var jspdf: any;
-declare var html2canvas: any;
+// Use standard tree-shaking friendly approach for Chart.js 3+
+import { 
+    ArcElement, 
+    BarController, 
+    BarElement, 
+    CategoryScale, 
+    Chart as ChartJS, 
+    Legend, 
+    LinearScale, 
+    Title, 
+    Tooltip 
+} from 'chart.js';
+
+ChartJS.register(
+    ArcElement,
+    BarController,
+    BarElement,
+    CategoryScale,
+    LinearScale,
+    Legend,
+    Title,
+    Tooltip
+);
 
 interface ReportsViewProps {
   subject: Subject;
@@ -144,7 +167,7 @@ const ReportsView: React.FC<ReportsViewProps> = ({ subject, students, evaluation
             if (chartInstance.current) chartInstance.current.destroy();
             
             const ctx = chartRef.current.getContext('2d');
-            chartInstance.current = new Chart(ctx, {
+            chartInstance.current = new ChartJS(ctx, {
                 type: 'bar',
                 data: {
                     labels: ['0-3.9', '4-7.9', '8-11.9', '12-15.9', '16-20'],
@@ -177,7 +200,7 @@ const ReportsView: React.FC<ReportsViewProps> = ({ subject, students, evaluation
 
     const handleDownloadCSV = () => {
         let csvContent = "data:text/csv;charset=utf-8,";
-        const headers = ["Cedula", "Nombre", "Correo"];
+        const headers = ["Cedula", "Nombre"];
         const corteEvals: Evaluation[][] = [[], [], []];
         evaluations.sort((a,b)=> a.corte - b.corte || a.name.localeCompare(b.name)).forEach(ev => corteEvals[ev.corte-1].push(ev));
         
@@ -191,7 +214,7 @@ const ReportsView: React.FC<ReportsViewProps> = ({ subject, students, evaluation
         csvContent += headers.join(",") + "\n";
         
         students.sort((a,b) => a.name.localeCompare(b.name)).forEach(student => {
-            const row = [student.id, `"${student.name}"`, student.email];
+            const row = [student.id, `"${student.name}"`];
             let finalGrade = 0;
             corteEvals.forEach((evals) => {
                 if(evals.length > 0) {
@@ -273,6 +296,8 @@ const ReportsView: React.FC<ReportsViewProps> = ({ subject, students, evaluation
             return (
                 <div className="p-4">
                     <select
+                        aria-label="Seleccionar evaluación"
+                        title="Seleccionar evaluación"
                         value={selectedEvaluationId}
                         onChange={e => setSelectedEvaluationId(e.target.value)}
                         className="w-full max-w-sm mb-4 p-2 border rounded bg-white dark:bg-gray-700 border-gray-300 dark:border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -311,7 +336,7 @@ const ReportsView: React.FC<ReportsViewProps> = ({ subject, students, evaluation
                     <h2 className="text-2xl font-bold text-gray-800 dark:text-gray-100">Reportes: {subject.name}</h2>
                     <p className="text-sm text-gray-500 dark:text-gray-400">{subject.period}</p>
                   </div>
-                  <button onClick={onClose} className="p-1 rounded-full text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">
+                                    <button onClick={onClose} title="Cerrar reportes" className="p-1 rounded-full text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200">
                     <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
                   </button>
                 </div>

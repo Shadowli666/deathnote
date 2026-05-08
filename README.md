@@ -1,20 +1,38 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# Deathnote
 
-# Run and deploy your AI Studio app
+Aplicación de gestión de notas con frontend en React y persistencia real en SQLite mediante un servidor Node.js.
 
-This contains everything you need to run your app locally.
+## Arquitectura
 
-View your app in AI Studio: https://ai.studio/apps/drive/117za0fNYN2f8NDUVMhAgxWPOgJe8Yvpj
+- Frontend: Vite + React en http://127.0.0.1:3000
+- Backend: Express + SQLite en http://127.0.0.1:3101
+- Archivo de base de datos: data/deathnote.sqlite
 
-## Run Locally
+## Migración de datos existentes
 
-**Prerequisites:**  Node.js
+La primera vez que abras la app con esta versión:
 
+1. El frontend revisa si existe información antigua en localStorage.
+2. Si encuentra una base guardada con sql.js o los arreglos legacy, la envía al backend.
+3. El backend importa esos datos a data/deathnote.sqlite.
+4. Cuando la importación termina, el almacenamiento local anterior se limpia automáticamente.
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+La migración solo se ejecuta una vez por navegador y se omite si el servidor ya tiene datos.
+
+## Desarrollo
+
+1. Instala dependencias:
+   npm install
+2. Inicia frontend y backend juntos:
+   npm run dev
+
+## Scripts útiles
+
+- npm run dev:client: inicia solo el frontend
+- npm run dev:server: inicia solo el backend SQLite
+- npm run build: compila el frontend
+- npm start: inicia solo el backend
+
+## Exportación para DBeaver
+
+El botón Exportar .sqlite descarga una copia del archivo SQLite servido por el backend. También puedes abrir directamente data/deathnote.sqlite desde DBeaver cuando el servidor no esté escribiendo datos.

@@ -4,7 +4,7 @@ import GradeTable from './GradeTable';
 import Modal from './Modal';
 import StudentImport from './StudentImport';
 import StudentManualEntry from './StudentManualEntry';
-import { PlusCircleIcon, ArrowLeftIcon, UserPlusIcon, UploadCloudIcon, BarChartIcon, MailIcon, TrashIcon, PencilIcon } from './Icons';
+import { PlusCircleIcon, ArrowLeftIcon, UserPlusIcon, UploadCloudIcon, BarChartIcon, TrashIcon, PencilIcon } from './Icons';
 import ReportsView from './ReportsView';
 
 interface SubjectViewProps {
@@ -18,18 +18,23 @@ interface SubjectViewProps {
   onEnrollStudent: (student: Student) => Promise<boolean>;
   onEnrollStudents: (students: Student[]) => Promise<void>;
   onDeleteEvaluation: (evaluationId: string) => Promise<void>;
+  onUpdateStudent: (originalId: string, student: Student) => Promise<boolean>;
   onUnenrollStudent: (studentId: string) => Promise<void>;
   onBack: () => void;
 }
 
 const CORTE_PERCENTAGES = { 1: 30, 2: 30, 3: 40 };
 
-const SubjectView: React.FC<SubjectViewProps> = ({ subject, students, evaluations, grades, onAddEvaluation, onUpdateEvaluation, onUpdateGrade, onEnrollStudent, onEnrollStudents, onDeleteEvaluation, onUnenrollStudent, onBack }) => {
+const SubjectView: React.FC<SubjectViewProps> = ({ subject, students, evaluations, grades, onAddEvaluation, onUpdateEvaluation, onUpdateGrade, onEnrollStudent, onEnrollStudents, onDeleteEvaluation, onUpdateStudent, onUnenrollStudent, onBack }) => {
   const [isEvalModalOpen, setIsEvalModalOpen] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [isManualEntryModalOpen, setIsManualEntryModalOpen] = useState(false);
+  const [isEditStudentModalOpen, setIsEditStudentModalOpen] = useState(false);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [editingEvaluation, setEditingEvaluation] = useState<Evaluation | null>(null);
+  const [editingStudent, setEditingStudent] = useState<Student | null>(null);
+  const [editStudentForm, setEditStudentForm] = useState({ id: '', name: '' });
+  const [studentEditError, setStudentEditError] = useState('');
 
   const [newEval, setNewEval] = useState({ name: '', percentage: '', corte: '1' });
   const [error, setError] = useState('');
@@ -45,6 +50,42 @@ const SubjectView: React.FC<SubjectViewProps> = ({ subject, students, evaluation
     setEditingEvaluation(null);
     setError('');
     setNewEval({ name: '', percentage: '', corte: '1' });
+  };
+
+  const handleOpenEditStudentModal = (student: Student) => {
+    setEditingStudent(student);
+    setEditStudentForm({ id: student.id, name: student.name });
+    setStudentEditError('');
+    setIsEditStudentModalOpen(true);
+  };
+
+  const handleCloseEditStudentModal = () => {
+    setIsEditStudentModalOpen(false);
+    setEditingStudent(null);
+    setEditStudentForm({ id: '', name: '' });
+    setStudentEditError('');
+  };
+
+  const handleSaveStudent = async () => {
+    if (!editingStudent) return;
+
+    if (!editStudentForm.id.trim() || !editStudentForm.name.trim()) {
+      setStudentEditError('Cédula y nombre son obligatorios.');
+      return;
+    }
+
+    const success = await onUpdateStudent(editingStudent.id, {
+      ...editingStudent,
+      id: editStudentForm.id.trim(),
+      name: editStudentForm.name.trim(),
+    });
+
+    if (!success) {
+      setStudentEditError('La cédula ingresada ya existe.');
+      return;
+    }
+
+    handleCloseEditStudentModal();
   };
 
   const handleOpenAddEvalModal = () => {
@@ -129,52 +170,11 @@ const SubjectView: React.FC<SubjectViewProps> = ({ subject, students, evaluation
       return grades.find(g => g.studentId === studentId && g.evaluationId === evaluationId);
   }, [grades]);
 
-  const handleEmailByEvaluation = (evaluation: Evaluation) => {
-    const subjectLine = `Calificaciones: ${evaluation.name} - ${subject.name}`;
-    let body = `Hola,\n\nA continuación se presentan las calificaciones para la evaluación "${evaluation.name}" (${evaluation.percentage}%):\n\n`;
-    const studentEmails = students.map(s => s.email).filter(Boolean);
-
-    students.sort((a,b) => a.name.localeCompare(b.name)).forEach(student => {
-        const grade = getGrade(student.id, evaluation.id);
-        const score = grade?.score ?? 'N/P';
-        body += `${student.name}: ${score}\n`;
-    });
-
-    body += "\nSaludos.";
-    window.location.href = `mailto:?bcc=${studentEmails.join(',')}&subject=${encodeURIComponent(subjectLine)}&body=${encodeURIComponent(body)}`;
-  };
-
-  const handleEmailByCorte = (corte: 1 | 2 | 3) => {
-      const corteEvals = evaluationsByCorte[corte];
-      if (corteEvals.length === 0) {
-          alert("No hay evaluaciones en este corte para enviar.");
-          return;
-      }
-
-      const subjectLine = `Calificaciones Finales del Corte ${corte} - ${subject.name}`;
-      let body = `Hola,\n\nA continuación se presentan las calificaciones finales para el Corte ${corte}:\n\n`;
-      const studentEmails = students.map(s => s.email).filter(Boolean);
-
-      students.sort((a,b) => a.name.localeCompare(b.name)).forEach(student => {
-          const weightedSum = corteEvals.reduce((total, ev) => {
-              const grade = getGrade(student.id, ev.id);
-              const score = grade?.score ?? 0;
-              return total + score * (ev.percentage / 100);
-          }, 0);
-          const totalPercentageInCorte = corteEvals.reduce((total, ev) => total + ev.percentage, 0);
-          const normalizedGrade = totalPercentageInCorte > 0 ? weightedSum / (totalPercentageInCorte / 100) : 0;
-          body += `${student.name}: ${normalizedGrade.toFixed(2)}\n`;
-      });
-
-      body += "\nSaludos.";
-      window.location.href = `mailto:?bcc=${studentEmails.join(',')}&subject=${encodeURIComponent(subjectLine)}&body=${encodeURIComponent(body)}`;
-  };
-
   return (
     <div className="p-4 sm:p-6 lg:p-8">
       <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-4">
-              <button onClick={onBack} className="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700">
+                <button onClick={onBack} title="Volver a materias" className="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700">
                   <ArrowLeftIcon className="w-6 h-6"/>
               </button>
               <h1 className="text-3xl font-bold text-gray-800 dark:text-gray-100">
@@ -217,9 +217,12 @@ const SubjectView: React.FC<SubjectViewProps> = ({ subject, students, evaluation
         <div className="mb-6 space-y-6">
             <div className="mb-4">
                 <p className="text-gray-600 dark:text-gray-300">Porcentaje total de evaluaciones: {totalPercentage.toFixed(2)}% / 100%</p>
-                <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2.5">
-                    <div className="bg-blue-600 h-2.5 rounded-full" style={{ width: `${totalPercentage}%`}}></div>
-                </div>
+                <progress
+                  className="w-full h-2.5 rounded-full overflow-hidden [&::-webkit-progress-bar]:bg-gray-200 [&::-webkit-progress-bar]:dark:bg-gray-700 [&::-webkit-progress-value]:bg-blue-600 [&::-moz-progress-bar]:bg-blue-600"
+                  max={100}
+                  value={Math.min(totalPercentage, 100)}
+                  title="Porcentaje total de evaluaciones"
+                />
             </div>
             
             <h2 className="text-xl font-semibold text-gray-800 dark:text-gray-100">Gestión de Evaluaciones</h2>
@@ -237,14 +240,6 @@ const SubjectView: React.FC<SubjectViewProps> = ({ subject, students, evaluation
                                     ({cortePercentage.toFixed(2)}% / {CORTE_PERCENTAGES[corteNum]}%)
                                 </span>
                             </h3>
-                            <button
-                                onClick={() => handleEmailByCorte(corteNum)}
-                                className="flex items-center gap-2 px-3 py-1 bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-200 rounded-md hover:bg-gray-300 dark:hover:bg-gray-500 transition-colors text-xs"
-                                aria-label={`Enviar notas del corte ${corteNum}`}
-                            >
-                                <MailIcon className="w-4 h-4" />
-                                <span>Enviar Notas del Corte</span>
-                            </button>
                         </div>
                         <ul className="space-y-2">
                             {corteEvals.map(ev => (
@@ -260,13 +255,6 @@ const SubjectView: React.FC<SubjectViewProps> = ({ subject, students, evaluation
                                             aria-label={`Editar evaluación ${ev.name}`}
                                         >
                                             <PencilIcon className="w-5 h-5" />
-                                        </button>
-                                        <button
-                                            onClick={() => handleEmailByEvaluation(ev)}
-                                            className="p-1 text-gray-500 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
-                                            aria-label={`Enviar notas por correo para ${ev.name}`}
-                                        >
-                                            <MailIcon className="w-5 h-5" />
                                         </button>
                                         <button
                                             onClick={() => {
@@ -290,7 +278,14 @@ const SubjectView: React.FC<SubjectViewProps> = ({ subject, students, evaluation
         </div>
 
       {students.length > 0 ? (
-        <GradeTable students={students} evaluations={subjectEvaluations} grades={grades} onUpdateGrade={onUpdateGrade} onUnenrollStudent={onUnenrollStudent} />
+        <GradeTable
+          students={students}
+          evaluations={subjectEvaluations}
+          grades={grades}
+          onUpdateGrade={onUpdateGrade}
+          onEditStudent={handleOpenEditStudentModal}
+          onUnenrollStudent={onUnenrollStudent}
+        />
       ) : (
         <div className="text-center py-10 bg-white dark:bg-gray-800 rounded-lg shadow mt-6">
           <p className="text-gray-500 dark:text-gray-400">No hay estudiantes matriculados en esta materia. Utiliza los botones de arriba para matricular o importar estudiantes.</p>
@@ -301,16 +296,16 @@ const SubjectView: React.FC<SubjectViewProps> = ({ subject, students, evaluation
       <Modal isOpen={isEvalModalOpen} onClose={handleCloseEvalModal} title={editingEvaluation ? "Editar Evaluación" : "Agregar Nueva Evaluación"}>
         <div className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Nombre de la Evaluación</label>
-            <input type="text" value={newEval.name} onChange={e => setNewEval({...newEval, name: e.target.value})} className="mt-1 block w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"/>
+            <label htmlFor="evaluation-name" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Nombre de la Evaluación</label>
+            <input id="evaluation-name" title="Nombre de la evaluación" placeholder="Ej: Parcial 1" type="text" value={newEval.name} onChange={e => setNewEval({...newEval, name: e.target.value})} className="mt-1 block w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"/>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Porcentaje Ponderado (%)</label>
-            <input type="number" value={newEval.percentage} onChange={e => setNewEval({...newEval, percentage: e.target.value})} className="mt-1 block w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"/>
+            <label htmlFor="evaluation-percentage" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Porcentaje Ponderado (%)</label>
+            <input id="evaluation-percentage" title="Porcentaje ponderado" placeholder="Ej: 20" type="number" value={newEval.percentage} onChange={e => setNewEval({...newEval, percentage: e.target.value})} className="mt-1 block w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"/>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Corte</label>
-            <select value={newEval.corte} onChange={e => setNewEval({...newEval, corte: e.target.value})} className="mt-1 block w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+            <label htmlFor="evaluation-corte" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Corte</label>
+            <select id="evaluation-corte" title="Corte de la evaluación" value={newEval.corte} onChange={e => setNewEval({...newEval, corte: e.target.value})} className="mt-1 block w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
               <option value="1">Corte 1 (max {CORTE_PERCENTAGES[1]}%)</option>
               <option value="2">Corte 2 (max {CORTE_PERCENTAGES[2]}%)</option>
               <option value="3">Corte 3 (max {CORTE_PERCENTAGES[3]}%)</option>
@@ -330,6 +325,40 @@ const SubjectView: React.FC<SubjectViewProps> = ({ subject, students, evaluation
             if(success) setIsManualEntryModalOpen(false);
             return success;
         }} />
+      </Modal>
+
+      <Modal isOpen={isEditStudentModalOpen} onClose={handleCloseEditStudentModal} title="Editar Estudiante">
+        <div className="space-y-4">
+          <div>
+            <label htmlFor="edit-student-id" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Cédula de Identidad</label>
+            <input
+              id="edit-student-id"
+              title="Cédula de identidad"
+              placeholder="Ej: V12345678"
+              type="text"
+              value={editStudentForm.id}
+              onChange={e => setEditStudentForm(prev => ({ ...prev, id: e.target.value }))}
+              className="mt-1 block w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            />
+          </div>
+          <div>
+            <label htmlFor="edit-student-name" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Nombre Completo</label>
+            <input
+              id="edit-student-name"
+              title="Nombre completo"
+              placeholder="Ej: Ana Pérez"
+              type="text"
+              value={editStudentForm.name}
+              onChange={e => setEditStudentForm(prev => ({ ...prev, name: e.target.value }))}
+              className="mt-1 block w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            />
+          </div>
+          {studentEditError && <p className="text-red-500 text-sm">{studentEditError}</p>}
+          <div className="flex justify-end gap-2 pt-2">
+            <button onClick={handleCloseEditStudentModal} className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 dark:bg-gray-600 dark:text-gray-100 dark:hover:bg-gray-500">Cancelar</button>
+            <button onClick={handleSaveStudent} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Guardar Cambios</button>
+          </div>
+        </div>
       </Modal>
 
       {/* Modal para Importar CSV */}

@@ -69,6 +69,34 @@ const ReportsView: React.FC<ReportsViewProps> = ({ subject, students, evaluation
         return grades.find(g => g.studentId === studentId && g.evaluationId === evaluationId);
     }, [grades]);
 
+    const getLastName = useCallback((name: string) => {
+        const parts = name.trim().split(/\s+/);
+        return parts.length > 1 ? parts.slice(1).join(' ') : parts[0] ?? '';
+    }, []);
+
+    const calculateWeightedCorteSum = useCallback((studentId: string, corte: 1 | 2 | 3, corteEvaluations: Evaluation[]) => {
+        if (corteEvaluations.length === 0) return 0;
+        return corteEvaluations.reduce((total, ev) => {
+            const score = getGrade(studentId, ev.id)?.score ?? 0;
+            return total + score * (ev.percentage / 100);
+        }, 0);
+    }, [getGrade]);
+
+    const calculateNormalizedCorteGrade = useCallback((studentId: string, corte: 1 | 2 | 3, corteEvaluations: Evaluation[]) => {
+        if (corteEvaluations.length === 0) return 0;
+
+        const weightedSum = calculateWeightedCorteSum(studentId, corte, corteEvaluations);
+        const totalPercentageInCorte = corteEvaluations.reduce((total, ev) => total + ev.percentage, 0);
+
+        if (totalPercentageInCorte === 0) return 0;
+
+        return weightedSum / (totalPercentageInCorte / 100);
+    }, [calculateWeightedCorteSum]);
+
+    const formatExportNumber = useCallback((value: number) => {
+        return Number.isInteger(value) ? String(value) : value.toFixed(2).replace('.', ',');
+    }, []);
+
     const calculateStats = useCallback((studentScores: { name: string; score: number }[], passingGrade = 10): Stats => {
         if (studentScores.length === 0) {
             return { average: 0, highest: 0, lowest: 0, passed: 0, failed: 0, passRate: 0, distribution: [0,0,0,0,0], approvedStudents: [], failedStudents: [] };
@@ -199,10 +227,12 @@ const ReportsView: React.FC<ReportsViewProps> = ({ subject, students, evaluation
     };
 
     const handleDownloadCSV = () => {
-        let csvContent = "data:text/csv;charset=utf-8,";
+        let csvContent = 'sep=;\n';
         const headers = ["Cedula", "Nombre"];
         const corteEvals: Evaluation[][] = [[], [], []];
-        evaluations.sort((a,b)=> a.corte - b.corte || a.name.localeCompare(b.name)).forEach(ev => corteEvals[ev.corte-1].push(ev));
+        [...evaluations]
+            .sort((a,b)=> a.corte - b.corte || a.name.localeCompare(b.name))
+            .forEach(ev => corteEvals[ev.corte-1].push(ev));
         
         corteEvals.forEach((evals, i) => {
             if(evals.length > 0) {
@@ -211,35 +241,38 @@ const ReportsView: React.FC<ReportsViewProps> = ({ subject, students, evaluation
             }
         });
         headers.push("Nota Final");
-        csvContent += headers.join(",") + "\n";
-        
-        students.sort((a,b) => a.name.localeCompare(b.name)).forEach(student => {
+        csvContent += headers.join(";") + "\n";
+
+        [...students].sort((a,b) => getLastName(a.name).localeCompare(getLastName(b.name)) || a.name.localeCompare(b.name)).forEach(student => {
             const row = [student.id, `"${student.name}"`];
             let finalGrade = 0;
-            corteEvals.forEach((evals) => {
+            corteEvals.forEach((evals, index) => {
                 if(evals.length > 0) {
-                    let corteTotal = 0;
                     evals.forEach(ev => {
                         const grade = getGrade(student.id, ev.id);
                         const score = grade?.score ?? 0;
-                        corteTotal += score * (ev.percentage / 100);
-                        row.push(score.toFixed(2));
+                        row.push(formatExportNumber(score));
                     });
-                    row.push(corteTotal.toFixed(2));
+                    const corteNumber = (index + 1) as 1 | 2 | 3;
+                    const corteTotal = calculateWeightedCorteSum(student.id, corteNumber, evals);
+                    const normalizedCorte = calculateNormalizedCorteGrade(student.id, corteNumber, evals);
+                    row.push(formatExportNumber(normalizedCorte));
                     finalGrade += corteTotal;
                 }
             });
-            row.push(finalGrade.toFixed(2));
-            csvContent += row.join(",") + "\n";
+            row.push(formatExportNumber(Number(finalGrade.toFixed(2))));
+            csvContent += row.join(";") + "\n";
         });
 
-        const encodedUri = encodeURI(csvContent);
+        const blob = new Blob([`\uFEFF${csvContent}`], { type: 'text/csv;charset=utf-8;' });
+        const encodedUri = URL.createObjectURL(blob);
         const link = document.createElement("a");
         link.setAttribute("href", encodedUri);
         link.setAttribute("download", `calificaciones_detalladas_${subject.name.replace(/\s+/g, '_')}.csv`);
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
+        URL.revokeObjectURL(encodedUri);
     };
 
     const ReportDetails = ({ stats }: { stats: Stats | null }) => {

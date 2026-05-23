@@ -3,7 +3,7 @@ import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { Student, Subject, Evaluation, Grade } from './types';
 import SubjectView from './components/SubjectView';
 import Modal from './components/Modal';
-import { PlusCircleIcon, BookOpenIcon, PencilIcon, DownloadIcon } from './components/Icons';
+import { PlusCircleIcon, BookOpenIcon, PencilIcon, DownloadIcon, MoonIcon, SunIcon } from './components/Icons';
 import {
   dbAddEvaluation,
   dbAddSubject,
@@ -24,7 +24,23 @@ import {
   exportDatabaseFile,
 } from './services/dbApi';
 
+const THEME_STORAGE_KEY = 'deathnote-theme';
+
+const getInitialTheme = () => {
+  if (typeof window === 'undefined') {
+    return 'light';
+  }
+
+  const savedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
+  if (savedTheme === 'dark' || savedTheme === 'light') {
+    return savedTheme;
+  }
+
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+};
+
 function App() {
+  const [theme, setTheme] = useState<'light' | 'dark'>(getInitialTheme);
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [selectedSubjectId, setSelectedSubjectId] = useState<string | null>(null);
   const [newSubjectName, setNewSubjectName] = useState('');
@@ -38,6 +54,12 @@ function App() {
   const [currentStudents, setCurrentStudents] = useState<Student[]>([]);
   const [currentEvaluations, setCurrentEvaluations] = useState<Evaluation[]>([]);
   const [currentGrades, setCurrentGrades] = useState<Grade[]>([]);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    root.classList.toggle('dark', theme === 'dark');
+    window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+  }, [theme]);
 
   useEffect(() => {
     const loadInitialData = async () => {
@@ -201,21 +223,26 @@ function App() {
     setCurrentGrades(updatedGrades);
   };
 
-  const handleUpdateGrade = async (studentId: string, evaluationId: string, score: number | null) => {
-      await dbUpdateGrade(studentId, evaluationId, score);
+    const handleUpdateGrade = async (studentId: string, evaluationId: string, gradeData: Pick<Grade, 'score' | 'observation'>) => {
+      const normalizedObservation = gradeData.observation?.trim() ?? '';
+      await dbUpdateGrade(studentId, evaluationId, gradeData.score, normalizedObservation);
       setCurrentGrades(prevGrades => {
           const newGrades = [...prevGrades];
           const gradeIndex = newGrades.findIndex(g => g.studentId === studentId && g.evaluationId === evaluationId);
           if (gradeIndex !== -1) {
-              newGrades[gradeIndex] = { ...newGrades[gradeIndex], score };
+          newGrades[gradeIndex] = { ...newGrades[gradeIndex], score: gradeData.score, observation: normalizedObservation };
           } else {
-              newGrades.push({ studentId, evaluationId, score });
+          newGrades.push({ studentId, evaluationId, score: gradeData.score, observation: normalizedObservation });
           }
           return newGrades;
       });
   };
 
   const selectedSubject = useMemo(() => subjects.find(s => s.id === selectedSubjectId), [subjects, selectedSubjectId]);
+
+  const toggleTheme = () => {
+    setTheme((currentTheme) => currentTheme === 'dark' ? 'light' : 'dark');
+  };
   
   const subjectsByPeriod = useMemo(() => {
     return subjects.reduce((acc, subject) => {
@@ -227,38 +254,52 @@ function App() {
   }, [subjects]);
 
   if (isLoading && !selectedSubject) {
-      return <div className="flex justify-center items-center h-screen text-gray-800 dark:text-gray-100"><p>Cargando base de datos...</p></div>;
+      return (
+        <div className="min-h-screen bg-gray-100 text-gray-900 transition-colors dark:bg-gray-900 dark:text-gray-100">
+          <ThemeToggleButton theme={theme} onToggle={toggleTheme} />
+          <div className="flex h-screen items-center justify-center">
+            <p>Cargando base de datos...</p>
+          </div>
+        </div>
+      );
   }
 
   if (selectedSubject) {
     return (
-      <SubjectView
-        subject={selectedSubject}
-        students={currentStudents}
-        evaluations={currentEvaluations}
-        grades={currentGrades}
-        onAddEvaluation={handleAddEvaluation}
-        onUpdateEvaluation={handleUpdateEvaluation}
-        onUpdateGrade={handleUpdateGrade}
-        onEnrollStudent={handleEnrollStudent}
-        onEnrollStudents={handleEnrollStudents}
-        onDeleteEvaluation={handleDeleteEvaluation}
-        onUpdateStudent={handleUpdateStudent}
-        onUnenrollStudent={handleUnenrollStudent}
-        onBack={() => setSelectedSubjectId(null)}
-      />
+      <div className="min-h-screen bg-gray-100 text-gray-900 transition-colors dark:bg-gray-900 dark:text-gray-100">
+        <ThemeToggleButton theme={theme} onToggle={toggleTheme} />
+        <SubjectView
+          subject={selectedSubject}
+          students={currentStudents}
+          evaluations={currentEvaluations}
+          grades={currentGrades}
+          onAddEvaluation={handleAddEvaluation}
+          onUpdateEvaluation={handleUpdateEvaluation}
+          onUpdateGrade={handleUpdateGrade}
+          onEnrollStudent={handleEnrollStudent}
+          onEnrollStudents={handleEnrollStudents}
+          onDeleteEvaluation={handleDeleteEvaluation}
+          onUpdateStudent={handleUpdateStudent}
+          onUnenrollStudent={handleUnenrollStudent}
+          onBack={() => setSelectedSubjectId(null)}
+        />
+      </div>
     );
   }
 
   return (
+    <div className="min-h-screen bg-gray-100 text-gray-900 transition-colors dark:bg-gray-900 dark:text-gray-100">
+      <ThemeToggleButton theme={theme} onToggle={toggleTheme} />
     <div className="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8">
-      <header className="mb-8 relative">
-        <h1 className="text-4xl font-bold text-center text-gray-800 dark:text-gray-100">Evaluador de Notas Pro</h1>
-        <p className="text-center text-gray-500 dark:text-gray-400 mt-2">Gestiona las calificaciones de tus estudiantes de forma sencilla y eficaz.</p>
-        <div className="absolute top-0 right-0">
+      <header className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="text-center sm:text-left">
+          <h1 className="text-4xl font-bold text-gray-800 dark:text-gray-100">Evaluador de Notas Pro</h1>
+          <p className="mt-2 text-gray-500 dark:text-gray-400">Gestiona las calificaciones de tus estudiantes de forma sencilla y eficaz.</p>
+        </div>
+        <div className="flex justify-center sm:justify-end">
           <button 
             onClick={exportDatabaseFile}
-            className="text-xs text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1"
+            className="inline-flex items-center gap-1 text-xs text-blue-600 dark:text-blue-400 hover:underline"
             title="Exportar base de datos para DBeaver"
           >
             <DownloadIcon className="w-4 h-4" />
@@ -346,8 +387,31 @@ function App() {
         />
       )}
     </div>
+      </div>
   );
 }
+
+    interface ThemeToggleButtonProps {
+      theme: 'light' | 'dark';
+      onToggle: () => void;
+    }
+
+    const ThemeToggleButton: React.FC<ThemeToggleButtonProps> = ({ theme, onToggle }) => {
+      const isDarkMode = theme === 'dark';
+
+      return (
+        <button
+          type="button"
+          onClick={onToggle}
+          title={isDarkMode ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro'}
+          aria-label={isDarkMode ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro'}
+          className="fixed bottom-4 right-4 z-50 inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-lg transition-colors hover:bg-gray-100 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 dark:hover:bg-gray-700"
+        >
+          {isDarkMode ? <SunIcon className="h-4 w-4" /> : <MoonIcon className="h-4 w-4" />}
+          <span>{isDarkMode ? 'Modo claro' : 'Modo oscuro'}</span>
+        </button>
+      );
+    };
 
 interface EditSubjectModalProps {
     subject: Subject;

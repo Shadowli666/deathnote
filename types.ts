@@ -16,6 +16,7 @@ export type Grade = {
   studentId: string;
   evaluationId: string;
   score: number | null; // 0-20
+  observation?: string;
 };
 
 export type Subject = {
@@ -28,4 +29,11 @@ export type Subject = {
 export type Enrollment = {
   studentId: string;
   subjectId: string;
+};
+
+export type AttendanceRecord = {
+  subjectId: string;
+  studentId: string;
+  date: string; // YYYY-MM-DD
+  present: boolean;
 };

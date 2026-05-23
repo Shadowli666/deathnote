@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { Subject, Student, Evaluation, Grade } from '../types';
 import GradeTable from './GradeTable';
 import Modal from './Modal';
@@ -6,6 +6,7 @@ import StudentImport from './StudentImport';
 import StudentManualEntry from './StudentManualEntry';
 import { PlusCircleIcon, ArrowLeftIcon, UserPlusIcon, UploadCloudIcon, BarChartIcon, TrashIcon, PencilIcon } from './Icons';
 import ReportsView from './ReportsView';
+import { dbGetAttendanceForSubject, dbSaveAttendanceForSubject } from '../services/dbApi';
 
 interface SubjectViewProps {
   subject: Subject;
@@ -14,7 +15,7 @@ interface SubjectViewProps {
   grades: Grade[];
   onAddEvaluation: (evaluation: Omit<Evaluation, 'id' | 'subjectId'>) => Promise<void>;
   onUpdateEvaluation: (evaluation: Evaluation) => Promise<void>;
-  onUpdateGrade: (studentId: string, evaluationId: string, score: number | null) => void;
+  onUpdateGrade: (studentId: string, evaluationId: string, gradeData: Pick<Grade, 'score' | 'observation'>) => Promise<void>;
   onEnrollStudent: (student: Student) => Promise<boolean>;
   onEnrollStudents: (students: Student[]) => Promise<void>;
   onDeleteEvaluation: (evaluationId: string) => Promise<void>;
@@ -24,6 +25,12 @@ interface SubjectViewProps {
 }
 
 const CORTE_PERCENTAGES = { 1: 30, 2: 30, 3: 40 };
+
+const getTodayLocalDate = () => {
+  const now = new Date();
+  const offsetMs = now.getTimezoneOffset() * 60 * 1000;
+  return new Date(now.getTime() - offsetMs).toISOString().split('T')[0];
+};
 
 const SubjectView: React.FC<SubjectViewProps> = ({ subject, students, evaluations, grades, onAddEvaluation, onUpdateEvaluation, onUpdateGrade, onEnrollStudent, onEnrollStudents, onDeleteEvaluation, onUpdateStudent, onUnenrollStudent, onBack }) => {
   const [isEvalModalOpen, setIsEvalModalOpen] = useState(false);
@@ -38,6 +45,12 @@ const SubjectView: React.FC<SubjectViewProps> = ({ subject, students, evaluation
 
   const [newEval, setNewEval] = useState({ name: '', percentage: '', corte: '1' });
   const [error, setError] = useState('');
+  const [attendanceDate, setAttendanceDate] = useState(getTodayLocalDate);
+  const [attendanceByStudent, setAttendanceByStudent] = useState<Record<string, boolean>>({});
+  const [attendanceLoading, setAttendanceLoading] = useState(false);
+  const [attendanceSaving, setAttendanceSaving] = useState(false);
+  const [attendanceError, setAttendanceError] = useState('');
+  const [attendanceFeedback, setAttendanceFeedback] = useState('');
 
   const subjectEvaluations = useMemo(() => evaluations.filter(ev => ev.subjectId === subject.id), [evaluations, subject.id]);
   
@@ -170,6 +183,94 @@ const SubjectView: React.FC<SubjectViewProps> = ({ subject, students, evaluation
       return grades.find(g => g.studentId === studentId && g.evaluationId === evaluationId);
   }, [grades]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadAttendance = async () => {
+      if (students.length === 0) {
+        setAttendanceByStudent({});
+        setAttendanceError('');
+        return;
+      }
+
+      setAttendanceLoading(true);
+      setAttendanceError('');
+      setAttendanceFeedback('');
+
+      try {
+        const records = await dbGetAttendanceForSubject(subject.id, attendanceDate);
+        if (cancelled) return;
+
+        const nextAttendance = students.reduce<Record<string, boolean>>((acc, student) => {
+          acc[student.id] = false;
+          return acc;
+        }, {});
+
+        records.forEach((record) => {
+          if (record.studentId in nextAttendance) {
+            nextAttendance[record.studentId] = record.present;
+          }
+        });
+
+        setAttendanceByStudent(nextAttendance);
+      } catch (err) {
+        if (!cancelled) {
+          setAttendanceError('No se pudo cargar la asistencia para la fecha seleccionada.');
+        }
+      } finally {
+        if (!cancelled) {
+          setAttendanceLoading(false);
+        }
+      }
+    };
+
+    loadAttendance();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [attendanceDate, students, subject.id]);
+
+  const handleToggleAttendance = (studentId: string) => {
+    setAttendanceFeedback('');
+    setAttendanceByStudent((prev) => ({
+      ...prev,
+      [studentId]: !prev[studentId],
+    }));
+  };
+
+  const handleSaveAttendance = async () => {
+    if (students.length === 0) return;
+
+    setAttendanceSaving(true);
+    setAttendanceError('');
+    setAttendanceFeedback('');
+
+    try {
+      await dbSaveAttendanceForSubject(
+        subject.id,
+        attendanceDate,
+        students.map((student) => ({
+          studentId: student.id,
+          present: Boolean(attendanceByStudent[student.id]),
+        })),
+      );
+      setAttendanceFeedback('Asistencia guardada correctamente.');
+    } catch (err) {
+      setAttendanceError('No se pudo guardar la asistencia. Intenta nuevamente.');
+    } finally {
+      setAttendanceSaving(false);
+    }
+  };
+
+  const attendanceSummary = useMemo(() => {
+    const presentCount = students.reduce((count, student) => {
+      return count + (attendanceByStudent[student.id] ? 1 : 0);
+    }, 0);
+    const total = students.length;
+    return { presentCount, absentCount: Math.max(total - presentCount, 0), total };
+  }, [attendanceByStudent, students]);
+
   return (
     <div className="p-4 sm:p-6 lg:p-8">
       <div className="flex items-center justify-between mb-2">
@@ -291,6 +392,80 @@ const SubjectView: React.FC<SubjectViewProps> = ({ subject, students, evaluation
           <p className="text-gray-500 dark:text-gray-400">No hay estudiantes matriculados en esta materia. Utiliza los botones de arriba para matricular o importar estudiantes.</p>
         </div>
       )}
+
+      <div className="mt-8 bg-white dark:bg-gray-800 rounded-lg shadow-md p-6">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h2 className="text-xl font-semibold text-gray-800 dark:text-gray-100">Registro de Asistencia</h2>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Marca presencia por estudiante para la fecha seleccionada.</p>
+          </div>
+          <div className="w-full sm:w-auto">
+            <label htmlFor="attendance-date" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Fecha</label>
+            <input
+              id="attendance-date"
+              title="Fecha de asistencia"
+              type="date"
+              value={attendanceDate}
+              onChange={(e) => setAttendanceDate(e.target.value)}
+              className="mt-1 w-full sm:w-52 px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            />
+          </div>
+        </div>
+
+        {students.length === 0 ? (
+          <p className="mt-6 text-gray-500 dark:text-gray-400">No hay estudiantes matriculados para registrar asistencia.</p>
+        ) : (
+          <>
+            <div className="mt-4 flex flex-wrap gap-4 text-sm text-gray-600 dark:text-gray-300">
+              <span>Presentes: <strong>{attendanceSummary.presentCount}</strong></span>
+              <span>Ausentes: <strong>{attendanceSummary.absentCount}</strong></span>
+              <span>Total: <strong>{attendanceSummary.total}</strong></span>
+            </div>
+
+            <div className="mt-4 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+              <div className="grid grid-cols-[1fr_auto] bg-gray-50 dark:bg-gray-700 px-4 py-3 text-sm font-semibold text-gray-700 dark:text-gray-200">
+                <span>Estudiante</span>
+                <span>Asistió</span>
+              </div>
+              {attendanceLoading ? (
+                <p className="px-4 py-6 text-sm text-gray-500 dark:text-gray-400">Cargando asistencia...</p>
+              ) : (
+                <ul className="divide-y divide-gray-200 dark:divide-gray-700">
+                  {students.map((student) => (
+                    <li key={student.id} className="grid grid-cols-[1fr_auto] items-center px-4 py-3">
+                      <div>
+                        <p className="font-medium text-gray-800 dark:text-gray-100">{student.name}</p>
+                        <p className="text-xs text-gray-500 dark:text-gray-400">Cédula: {student.id}</p>
+                      </div>
+                      <label className="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(attendanceByStudent[student.id])}
+                          onChange={() => handleToggleAttendance(student.id)}
+                          className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        <span>{attendanceByStudent[student.id] ? 'Presente' : 'Ausente'}</span>
+                      </label>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            <div className="mt-4 flex flex-wrap items-center gap-3">
+              <button
+                onClick={handleSaveAttendance}
+                disabled={attendanceLoading || attendanceSaving}
+                className="px-4 py-2 bg-emerald-600 text-white rounded-lg shadow hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                {attendanceSaving ? 'Guardando...' : 'Guardar asistencia'}
+              </button>
+              {attendanceError && <p className="text-sm text-red-500">{attendanceError}</p>}
+              {attendanceFeedback && <p className="text-sm text-emerald-600 dark:text-emerald-400">{attendanceFeedback}</p>}
+            </div>
+          </>
+        )}
+      </div>
 
       {/* Modal para Nueva/Editar Evaluación */}
       <Modal isOpen={isEvalModalOpen} onClose={handleCloseEvalModal} title={editingEvaluation ? "Editar Evaluación" : "Agregar Nueva Evaluación"}>

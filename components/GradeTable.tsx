@@ -1,17 +1,20 @@
-import React, { useMemo, useCallback } from 'react';
+import React, { useMemo, useCallback, useState } from 'react';
 import { Student, Evaluation, Grade } from '../types';
-import { TrashIcon, PencilIcon } from './Icons';
+import { TrashIcon, PencilIcon, NoteIcon } from './Icons';
+import Modal from './Modal';
 
 interface GradeTableProps {
   students: Student[];
   evaluations: Evaluation[];
   grades: Grade[];
-  onUpdateGrade: (studentId: string, evaluationId: string, score: number | null) => void;
+  onUpdateGrade: (studentId: string, evaluationId: string, gradeData: Pick<Grade, 'score' | 'observation'>) => Promise<void>;
   onEditStudent: (student: Student) => void;
   onUnenrollStudent: (studentId: string) => void;
 }
 
 const GradeTable: React.FC<GradeTableProps> = ({ students, evaluations, grades, onUpdateGrade, onEditStudent, onUnenrollStudent }) => {
+  const [editingGrade, setEditingGrade] = useState<{ student: Student; evaluation: Evaluation; grade?: Grade } | null>(null);
+  const [observationDraft, setObservationDraft] = useState('');
   const evaluationsByCorte = useMemo(() => {
     const cortes: { [key in 1 | 2 | 3]: Evaluation[] } = { 1: [], 2: [], 3: [] };
     evaluations.forEach(ev => cortes[ev.corte].push(ev));
@@ -70,9 +73,34 @@ const GradeTable: React.FC<GradeTableProps> = ({ students, evaluations, grades, 
     return headers;
   };
   
-  const sortedStudents = useMemo(() => [...students].sort((a, b) => a.name.localeCompare(b.name)), [students]);
+  const sortedStudents = useMemo(() => {
+    const getLastName = (name: string) => name.substring(name.indexOf(' ') + 1);
+    return [...students].sort((a, b) => getLastName(a.name).localeCompare(getLastName(b.name)));
+  }, [students]);
+
+  const handleOpenObservationModal = (student: Student, evaluation: Evaluation, grade?: Grade) => {
+    setEditingGrade({ student, evaluation, grade });
+    setObservationDraft(grade?.observation ?? '');
+  };
+
+  const handleCloseObservationModal = () => {
+    setEditingGrade(null);
+    setObservationDraft('');
+  };
+
+  const handleSaveObservation = async () => {
+    if (!editingGrade) return;
+
+    await onUpdateGrade(editingGrade.student.id, editingGrade.evaluation.id, {
+      score: editingGrade.grade?.score ?? null,
+      observation: observationDraft,
+    });
+
+    handleCloseObservationModal();
+  };
 
   return (
+    <>
     <div className="overflow-auto rounded-lg shadow-md mt-6">
       <table className="w-full border-collapse bg-white dark:bg-gray-800 text-left text-sm text-gray-500 dark:text-gray-400">
         <thead className="bg-gray-50 dark:bg-gray-700">
@@ -121,9 +149,10 @@ const GradeTable: React.FC<GradeTableProps> = ({ students, evaluations, grades, 
                             const grade = getGrade(student.id, ev.id);
                             return (
                                 <td key={`${student.id}-${ev.id}`} className="p-1">
-                                    <input
-                                      title={`Nota de ${student.name} en ${ev.name}`}
-                                      placeholder="0-20"
+                                    <div className="flex items-center gap-1">
+                                      <input
+                                        title={`Nota de ${student.name} en ${ev.name}`}
+                                        placeholder="0-20"
                                         type="number"
                                         min="0"
                                         max="20"
@@ -131,10 +160,23 @@ const GradeTable: React.FC<GradeTableProps> = ({ students, evaluations, grades, 
                                         value={grade?.score ?? ''}
                                         onChange={(e) => {
                                             const val = e.target.value;
-                                            onUpdateGrade(student.id, ev.id, val === '' ? null : Math.max(0, Math.min(20, parseFloat(val))));
+                                            void onUpdateGrade(student.id, ev.id, {
+                                              score: val === '' ? null : Math.max(0, Math.min(20, parseFloat(val))),
+                                              observation: grade?.observation ?? '',
+                                            });
                                         }}
                                         className="w-20 p-2 border rounded bg-gray-50 dark:bg-gray-700 border-gray-300 dark:border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                    />
+                                      />
+                                      <button
+                                        type="button"
+                                        onClick={() => handleOpenObservationModal(student, ev, grade)}
+                                        className={`inline-flex h-10 w-10 items-center justify-center rounded border transition-colors ${grade?.observation?.trim() ? 'border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-500 dark:bg-amber-950/40 dark:text-amber-300 dark:hover:bg-amber-900/40' : 'border-gray-300 bg-gray-100 text-gray-600 hover:bg-gray-200 dark:border-gray-600 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600'}`}
+                                        title={grade?.observation?.trim() ? grade.observation : `Añadir observación para ${student.name} en ${ev.name}`}
+                                        aria-label={grade?.observation?.trim() ? `Editar observación de ${student.name} en ${ev.name}` : `Añadir observación para ${student.name} en ${ev.name}`}
+                                      >
+                                        <NoteIcon className="h-4 w-4" />
+                                      </button>
+                                    </div>
                                 </td>
                             );
                         })}
@@ -152,6 +194,37 @@ const GradeTable: React.FC<GradeTableProps> = ({ students, evaluations, grades, 
         </tbody>
       </table>
     </div>
+    <Modal
+      isOpen={Boolean(editingGrade)}
+      onClose={handleCloseObservationModal}
+      title={editingGrade ? `Observación: ${editingGrade.student.name}` : 'Observación'}
+    >
+      {editingGrade && (
+        <div className="space-y-4">
+          <div className="rounded-md bg-gray-50 p-3 text-sm text-gray-700 dark:bg-gray-700 dark:text-gray-200">
+            <p className="font-medium">{editingGrade.evaluation.name}</p>
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Nota actual: {editingGrade.grade?.score ?? 'Sin nota'}</p>
+          </div>
+          <div>
+            <label htmlFor="grade-observation" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Notas u observaciones</label>
+            <textarea
+              id="grade-observation"
+              title="Notas u observaciones"
+              placeholder="Campo opcional"
+              value={observationDraft}
+              onChange={(e) => setObservationDraft(e.target.value)}
+              rows={4}
+              className="mt-1 block w-full resize-none rounded-md border border-gray-300 bg-white px-3 py-2 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500 dark:border-gray-600 dark:bg-gray-700"
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <button onClick={handleCloseObservationModal} className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 dark:bg-gray-600 dark:text-gray-100 dark:hover:bg-gray-500">Cancelar</button>
+            <button onClick={() => void handleSaveObservation()} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Guardar</button>
+          </div>
+        </div>
+      )}
+    </Modal>
+    </>
   );
 };
 

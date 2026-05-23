@@ -1,5 +1,5 @@
 import initSqlJs from 'sql.js';
-import { Enrollment, Evaluation, Grade, Student, Subject } from '../types';
+import { AttendanceRecord, Enrollment, Evaluation, Grade, Student, Subject } from '../types';
 
 const DB_KEY = 'sqlite-db';
 const LEGACY_MIGRATED_KEY = 'data-migrated-to-sqlite';
@@ -78,9 +78,16 @@ const loadLegacySqliteData = async (): Promise<LegacyPayload | null> => {
   })) as Subject[];
   const evaluations = parseResults(database.prepare('SELECT id, subjectId, corte, name, percentage FROM evaluations')) as Evaluation[];
   const enrollments = parseResults(database.prepare('SELECT studentId, subjectId FROM enrollments')) as Enrollment[];
-  const grades = parseResults(database.prepare('SELECT studentId, evaluationId, score FROM grades')).map((grade: any) => ({
+  const gradesColumns = parseResults(database.prepare('PRAGMA table_info(grades)')).map((column: any) => column.name);
+  const hasObservation = gradesColumns.includes('observation');
+  const gradesQuery = hasObservation
+    ? 'SELECT studentId, evaluationId, score, observation FROM grades'
+    : 'SELECT studentId, evaluationId, score, "" AS observation FROM grades';
+
+  const grades = parseResults(database.prepare(gradesQuery)).map((grade: any) => ({
     ...grade,
     score: grade.score === undefined ? null : grade.score,
+    observation: typeof grade.observation === 'string' ? grade.observation : '',
   })) as Grade[];
 
   database.close();
@@ -105,7 +112,16 @@ const loadLegacyJsonData = (): LegacyPayload | null => {
     ordering: index,
   }));
 
-  return { students, subjects, evaluations, grades, enrollments };
+  return {
+    students,
+    subjects,
+    evaluations,
+    grades: grades.map((grade) => ({
+      ...grade,
+      observation: typeof grade.observation === 'string' ? grade.observation : '',
+    })),
+    enrollments,
+  };
 };
 
 const clearLegacyLocalData = () => {
@@ -221,7 +237,21 @@ export const dbDeleteEvaluation = (evaluationId: string) => apiFetch<void>(`/api
   method: 'DELETE',
 });
 
-export const dbUpdateGrade = (studentId: string, evaluationId: string, score: number | null) => apiFetch<void>('/api/grades', {
+export const dbUpdateGrade = (studentId: string, evaluationId: string, score: number | null, observation: string) => apiFetch<void>('/api/grades', {
   method: 'PUT',
-  body: JSON.stringify({ studentId, evaluationId, score }),
+  body: JSON.stringify({ studentId, evaluationId, score, observation }),
+});
+
+export const dbGetAttendanceForSubject = (subjectId: string, date: string) => {
+  const params = new URLSearchParams({ date });
+  return apiFetch<AttendanceRecord[]>(`/api/subjects/${subjectId}/attendance?${params.toString()}`);
+};
+
+export const dbSaveAttendanceForSubject = (
+  subjectId: string,
+  date: string,
+  entries: Array<{ studentId: string; present: boolean }>,
+) => apiFetch<void>(`/api/subjects/${subjectId}/attendance/${encodeURIComponent(date)}`, {
+  method: 'PUT',
+  body: JSON.stringify({ entries }),
 });

@@ -49,11 +49,28 @@ const createSchema = () => {
       studentId TEXT NOT NULL,
       evaluationId TEXT NOT NULL,
       score REAL,
+      observation TEXT NOT NULL DEFAULT '',
       PRIMARY KEY(studentId, evaluationId),
       FOREIGN KEY(studentId) REFERENCES students(id) ON DELETE CASCADE,
       FOREIGN KEY(evaluationId) REFERENCES evaluations(id) ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS attendance (
+      subjectId TEXT NOT NULL,
+      studentId TEXT NOT NULL,
+      date TEXT NOT NULL,
+      present INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY(subjectId, studentId, date),
+      FOREIGN KEY(subjectId) REFERENCES subjects(id) ON DELETE CASCADE,
+      FOREIGN KEY(studentId) REFERENCES students(id) ON DELETE CASCADE
+    );
   `);
+
+  const gradeColumns = db.prepare('PRAGMA table_info(grades)').all();
+  const hasObservation = gradeColumns.some((column) => column.name === 'observation');
+  if (!hasObservation) {
+    db.exec("ALTER TABLE grades ADD COLUMN observation TEXT NOT NULL DEFAULT ''");
+  }
 };
 
 createSchema();
@@ -73,13 +90,18 @@ const getSubjectStudents = db.prepare(`
   FROM students s
   JOIN enrollments e ON s.id = e.studentId
   WHERE e.subjectId = ?
-  ORDER BY s.name ASC, s.id ASC
+  ORDER BY SUBSTR(s.name, INSTR(s.name, ' ') + 1) ASC, s.name ASC, s.id ASC
 `);
 const getSubjectGrades = db.prepare(`
-  SELECT g.studentId, g.evaluationId, g.score
+  SELECT g.studentId, g.evaluationId, g.score, g.observation
   FROM grades g
   JOIN evaluations e ON g.evaluationId = e.id
   WHERE e.subjectId = ?
+`);
+const getSubjectAttendanceByDate = db.prepare(`
+  SELECT subjectId, studentId, date, present
+  FROM attendance
+  WHERE subjectId = ? AND date = ?
 `);
 
 app.get('/api/health', (_req, res) => {
@@ -169,11 +191,16 @@ app.put('/api/students/:originalId', (req, res) => {
   }
 
   const updateStudent = db.transaction(() => {
-    db.prepare('UPDATE students SET id = ?, name = ? WHERE id = ?').run(id, name, originalId);
-    if (originalId !== id) {
-      db.prepare('UPDATE enrollments SET studentId = ? WHERE studentId = ?').run(id, originalId);
-      db.prepare('UPDATE grades SET studentId = ? WHERE studentId = ?').run(id, originalId);
+    if (originalId === id) {
+      db.prepare('UPDATE students SET name = ? WHERE id = ?').run(name, originalId);
+      return;
     }
+
+    db.prepare('INSERT INTO students (id, name) VALUES (?, ?)').run(id, name);
+    db.prepare('UPDATE enrollments SET studentId = ? WHERE studentId = ?').run(id, originalId);
+    db.prepare('UPDATE grades SET studentId = ? WHERE studentId = ?').run(id, originalId);
+    db.prepare('UPDATE attendance SET studentId = ? WHERE studentId = ?').run(id, originalId);
+    db.prepare('DELETE FROM students WHERE id = ?').run(originalId);
   });
 
   updateStudent();
@@ -190,7 +217,7 @@ app.post('/api/subjects/:subjectId/enrollments/bulk', (req, res) => {
 
   const enroll = db.transaction((items) => {
     const enrollStmt = db.prepare('INSERT OR IGNORE INTO enrollments (studentId, subjectId) VALUES (?, ?)');
-    const gradeStmt = db.prepare('INSERT OR IGNORE INTO grades (studentId, evaluationId, score) VALUES (?, ?, NULL)');
+    const gradeStmt = db.prepare("INSERT OR IGNORE INTO grades (studentId, evaluationId, score, observation) VALUES (?, ?, NULL, '')");
     const evaluations = getSubjectEvaluations.all(subjectId);
 
     for (const student of items) {
@@ -223,7 +250,7 @@ app.post('/api/subjects/:subjectId/enrollments', (req, res) => {
   upsertStudents.run(student.id, student.name);
   db.prepare('INSERT INTO enrollments (studentId, subjectId) VALUES (?, ?)').run(student.id, subjectId);
 
-  const gradeStmt = db.prepare('INSERT OR IGNORE INTO grades (studentId, evaluationId, score) VALUES (?, ?, NULL)');
+  const gradeStmt = db.prepare("INSERT OR IGNORE INTO grades (studentId, evaluationId, score, observation) VALUES (?, ?, NULL, '')");
   for (const evaluation of getSubjectEvaluations.all(subjectId)) {
     gradeStmt.run(student.id, evaluation.id);
   }
@@ -251,7 +278,7 @@ app.post('/api/subjects/:subjectId/evaluations', (req, res) => {
     db.prepare('INSERT INTO evaluations (id, subjectId, corte, name, percentage) VALUES (?, ?, ?, ?, ?)')
       .run(evaluation.id, evaluation.subjectId, evaluation.corte, evaluation.name, evaluation.percentage);
 
-    const gradeStmt = db.prepare('INSERT OR IGNORE INTO grades (studentId, evaluationId, score) VALUES (?, ?, NULL)');
+    const gradeStmt = db.prepare("INSERT OR IGNORE INTO grades (studentId, evaluationId, score, observation) VALUES (?, ?, NULL, '')");
     for (const student of getSubjectStudents.all(subjectId)) {
       gradeStmt.run(student.id, evaluation.id);
     }
@@ -280,8 +307,52 @@ app.delete('/api/evaluations/:evaluationId', (req, res) => {
 });
 
 app.put('/api/grades', (req, res) => {
-  const { studentId, evaluationId, score } = req.body ?? {};
-  db.prepare('UPDATE grades SET score = ? WHERE studentId = ? AND evaluationId = ?').run(score, studentId, evaluationId);
+  const { studentId, evaluationId, score, observation = '' } = req.body ?? {};
+  db.prepare('UPDATE grades SET score = ?, observation = ? WHERE studentId = ? AND evaluationId = ?').run(score, observation, studentId, evaluationId);
+  res.status(204).end();
+});
+
+app.get('/api/subjects/:subjectId/attendance', (req, res) => {
+  const { subjectId } = req.params;
+  const { date } = req.query;
+
+  if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    res.status(400).json({ error: 'valid date query param is required (YYYY-MM-DD)' });
+    return;
+  }
+
+  const records = getSubjectAttendanceByDate.all(subjectId, date).map((record) => ({
+    ...record,
+    present: Boolean(record.present),
+  }));
+
+  res.json(records);
+});
+
+app.put('/api/subjects/:subjectId/attendance/:date', (req, res) => {
+  const { subjectId, date } = req.params;
+  const { entries } = req.body ?? {};
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    res.status(400).json({ error: 'valid date param is required (YYYY-MM-DD)' });
+    return;
+  }
+
+  if (!Array.isArray(entries)) {
+    res.status(400).json({ error: 'entries array is required' });
+    return;
+  }
+
+  const saveAttendance = db.transaction((items) => {
+    db.prepare('DELETE FROM attendance WHERE subjectId = ? AND date = ?').run(subjectId, date);
+    const insertStmt = db.prepare('INSERT INTO attendance (subjectId, studentId, date, present) VALUES (?, ?, ?, ?)');
+    for (const entry of items) {
+      if (!entry?.studentId) continue;
+      insertStmt.run(subjectId, entry.studentId, date, entry.present ? 1 : 0);
+    }
+  });
+
+  saveAttendance(entries);
   res.status(204).end();
 });
 
@@ -314,9 +385,9 @@ app.post('/api/migrations/import-local-data', (req, res) => {
       insertEnrollment.run(enrollment.studentId, enrollment.subjectId);
     }
 
-    const insertGrade = db.prepare('INSERT OR IGNORE INTO grades (studentId, evaluationId, score) VALUES (?, ?, ?)');
+    const insertGrade = db.prepare("INSERT OR IGNORE INTO grades (studentId, evaluationId, score, observation) VALUES (?, ?, ?, ?)");
     for (const grade of grades) {
-      insertGrade.run(grade.studentId, grade.evaluationId, grade.score ?? null);
+      insertGrade.run(grade.studentId, grade.evaluationId, grade.score ?? null, typeof grade.observation === 'string' ? grade.observation : '');
     }
   });
 

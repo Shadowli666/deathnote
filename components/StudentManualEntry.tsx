@@ -8,7 +8,7 @@ interface StudentManualEntryProps {
 }
 
 const StudentManualEntry: React.FC<StudentManualEntryProps> = ({ onAddStudent }) => {
-  const [newStudent, setNewStudent] = useState({ id: '', name: '' });
+  const [newStudent, setNewStudent] = useState({ id: '', firstName: '', lastName: '' });
   const [error, setError] = useState('');
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -17,18 +17,19 @@ const StudentManualEntry: React.FC<StudentManualEntryProps> = ({ onAddStudent })
   };
 
   const handleSubmit = async () => {
-    if (!newStudent.id.trim() || !newStudent.name.trim()) {
+    if (!newStudent.id.trim() || !newStudent.firstName.trim() || !newStudent.lastName.trim()) {
       setError('Todos los campos son obligatorios.');
       return;
     }
 
     const success = await onAddStudent({
         id: newStudent.id.trim(),
-        name: newStudent.name.trim(),
+        firstName: newStudent.firstName.trim(),
+        lastName: newStudent.lastName.trim(),
     });
 
     if (success) {
-        setNewStudent({ id: '', name: '' });
+        setNewStudent({ id: '', firstName: '', lastName: '' });
         setError('');
     } else {
         setError('Este estudiante ya está matriculado en esta materia.');
@@ -41,9 +42,15 @@ const StudentManualEntry: React.FC<StudentManualEntryProps> = ({ onAddStudent })
         <label htmlFor="id" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Cédula de Identidad</label>
         <input type="text" id="id" name="id" value={newStudent.id} onChange={handleInputChange} className="mt-1 block w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"/>
       </div>
-      <div>
-        <label htmlFor="name" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Nombre Completo</label>
-        <input type="text" id="name" name="name" value={newStudent.name} onChange={handleInputChange} className="mt-1 block w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"/>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+            <label htmlFor="firstName" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Nombres</label>
+            <input type="text" id="firstName" name="firstName" value={newStudent.firstName} onChange={handleInputChange} className="mt-1 block w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"/>
+        </div>
+        <div>
+            <label htmlFor="lastName" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Apellidos</label>
+            <input type="text" id="lastName" name="lastName" value={newStudent.lastName} onChange={handleInputChange} className="mt-1 block w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"/>
+        </div>
       </div>
       {error && <p className="text-red-500 text-sm">{error}</p>}
       <div className="flex justify-end pt-2">

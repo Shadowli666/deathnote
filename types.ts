@@ -1,7 +1,8 @@
 
 export type Student = {
   id: string; // Cedula
-  name: string;
+  firstName: string;
+  lastName: string;
 };
 
 export type Evaluation = {

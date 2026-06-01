@@ -14,7 +14,6 @@
   "dependencies": {
     "@tailwindcss/postcss": "^4.2.4",
     "@types/sql.js": "^1.4.11",
-    "better-sqlite3": "^11.9.1",
     "chart.js": "^4.5.1",
     "concurrently": "^9.1.2",
     "express": "^5.1.0",

@@ -1,8 +1,8 @@
-import fs from 'fs';
-import path from 'path';
-import crypto from 'crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
 import express from 'express';
-import Database from 'better-sqlite3';
+import { DatabaseSync } from 'node:sqlite';
 
 const app = express();
 const port = Number(process.env.PORT || 3101);
@@ -11,14 +11,30 @@ const dbPath = path.join(dataDir, 'deathnote.sqlite');
 
 fs.mkdirSync(dataDir, { recursive: true });
 
-const db = new Database(dbPath);
-db.pragma('foreign_keys = ON');
+const db = new DatabaseSync(dbPath);
+db.exec('PRAGMA foreign_keys = ON');
+
+// Helper to simulate better-sqlite3's transaction method
+db.transaction = (fn) => {
+  return (...args) => {
+    db.exec('BEGIN');
+    try {
+      const result = fn(...args);
+      db.exec('COMMIT');
+      return result;
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+  };
+};
 
 const createSchema = () => {
   db.exec(`
     CREATE TABLE IF NOT EXISTS students (
       id TEXT PRIMARY KEY,
-      name TEXT NOT NULL
+      firstName TEXT NOT NULL DEFAULT '',
+      lastName TEXT NOT NULL DEFAULT ''
     );
 
     CREATE TABLE IF NOT EXISTS subjects (
@@ -66,6 +82,45 @@ const createSchema = () => {
     );
   `);
 
+  const studentColumns = db.prepare("PRAGMA table_info(students)").all();
+  const hasFirstName = studentColumns.some((column) => column.name === 'firstName');
+  
+  if (!hasFirstName) {
+    db.exec(`
+      ALTER TABLE students ADD COLUMN firstName TEXT NOT NULL DEFAULT '';
+      ALTER TABLE students ADD COLUMN lastName TEXT NOT NULL DEFAULT '';
+    `);
+
+    try {
+      const hasName = studentColumns.some((column) => column.name === 'name');
+      if (hasName) {
+        const students = db.prepare("SELECT id, name FROM students").all();
+        const updateStmt = db.prepare("UPDATE students SET firstName = ?, lastName = ? WHERE id = ?");
+        
+        db.transaction(() => {
+          for (const s of students) {
+            const parts = s.name.trim().split(/\s+/);
+            let firstName = '';
+            let lastName = '';
+            
+            if (parts.length === 1) {
+              firstName = parts[0];
+            } else if (parts.length === 2) {
+              firstName = parts[0];
+              lastName = parts[1];
+            } else {
+              lastName = parts.slice(-2).join(' ');
+              firstName = parts.slice(0, -2).join(' ');
+            }
+            updateStmt.run(firstName, lastName, s.id);
+          }
+        })();
+      }
+    } catch (e) {
+      console.error("Migration failed:", e);
+    }
+  }
+
   const gradeColumns = db.prepare('PRAGMA table_info(grades)').all();
   const hasObservation = gradeColumns.some((column) => column.name === 'observation');
   if (!hasObservation) {
@@ -84,21 +139,21 @@ const getCounts = () => ({
   students: db.prepare('SELECT COUNT(*) AS count FROM students').get().count,
 });
 
-const getSubjectEvaluations = db.prepare('SELECT * FROM evaluations WHERE subjectId = ? ORDER BY corte ASC, name ASC');
-const getSubjectStudents = db.prepare(`
+const getSubjectEvaluations = () => db.prepare('SELECT * FROM evaluations WHERE subjectId = ? ORDER BY corte ASC, name ASC');
+const getSubjectStudents = () => db.prepare(`
   SELECT s.*
   FROM students s
   JOIN enrollments e ON s.id = e.studentId
   WHERE e.subjectId = ?
-  ORDER BY SUBSTR(s.name, INSTR(s.name, ' ') + 1) ASC, s.name ASC, s.id ASC
+  ORDER BY s.lastName ASC, s.firstName ASC, s.id ASC
 `);
-const getSubjectGrades = db.prepare(`
+const getSubjectGrades = () => db.prepare(`
   SELECT g.studentId, g.evaluationId, g.score, g.observation
   FROM grades g
   JOIN evaluations e ON g.evaluationId = e.id
   WHERE e.subjectId = ?
 `);
-const getSubjectAttendanceByDate = db.prepare(`
+const getSubjectAttendanceByDate = () => db.prepare(`
   SELECT subjectId, studentId, date, present
   FROM attendance
   WHERE subjectId = ? AND date = ?
@@ -160,25 +215,25 @@ app.put('/api/subjects/order', (req, res) => {
 });
 
 app.get('/api/subjects/:subjectId/students', (req, res) => {
-  res.json(getSubjectStudents.all(req.params.subjectId));
+  res.json(getSubjectStudents().all(req.params.subjectId));
 });
 
 app.get('/api/subjects/:subjectId/evaluations', (req, res) => {
-  res.json(getSubjectEvaluations.all(req.params.subjectId));
+  res.json(getSubjectEvaluations().all(req.params.subjectId));
 });
 
 app.get('/api/subjects/:subjectId/grades', (req, res) => {
-  res.json(getSubjectGrades.all(req.params.subjectId));
+  res.json(getSubjectGrades().all(req.params.subjectId));
 });
 
-const upsertStudents = db.prepare('INSERT INTO students (id, name) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name');
+const upsertStudents = db.prepare('INSERT INTO students (id, firstName, lastName) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET firstName = excluded.firstName, lastName = excluded.lastName');
 
 app.put('/api/students/:originalId', (req, res) => {
   const { originalId } = req.params;
-  const { id, name } = req.body ?? {};
+  const { id, firstName, lastName } = req.body ?? {};
 
-  if (!id || !name) {
-    res.status(400).json({ error: 'id and name are required' });
+  if (!id || !firstName) {
+    res.status(400).json({ error: 'id and firstName are required' });
     return;
   }
 
@@ -192,11 +247,11 @@ app.put('/api/students/:originalId', (req, res) => {
 
   const updateStudent = db.transaction(() => {
     if (originalId === id) {
-      db.prepare('UPDATE students SET name = ? WHERE id = ?').run(name, originalId);
+      db.prepare('UPDATE students SET firstName = ?, lastName = ? WHERE id = ?').run(firstName, lastName || '', originalId);
       return;
     }
 
-    db.prepare('INSERT INTO students (id, name) VALUES (?, ?)').run(id, name);
+    db.prepare('INSERT INTO students (id, firstName, lastName) VALUES (?, ?, ?)').run(id, firstName, lastName || '');
     db.prepare('UPDATE enrollments SET studentId = ? WHERE studentId = ?').run(id, originalId);
     db.prepare('UPDATE grades SET studentId = ? WHERE studentId = ?').run(id, originalId);
     db.prepare('UPDATE attendance SET studentId = ? WHERE studentId = ?').run(id, originalId);
@@ -218,10 +273,10 @@ app.post('/api/subjects/:subjectId/enrollments/bulk', (req, res) => {
   const enroll = db.transaction((items) => {
     const enrollStmt = db.prepare('INSERT OR IGNORE INTO enrollments (studentId, subjectId) VALUES (?, ?)');
     const gradeStmt = db.prepare("INSERT OR IGNORE INTO grades (studentId, evaluationId, score, observation) VALUES (?, ?, NULL, '')");
-    const evaluations = getSubjectEvaluations.all(subjectId);
+    const evaluations = getSubjectEvaluations().all(subjectId);
 
     for (const student of items) {
-      upsertStudents.run(student.id, student.name);
+      upsertStudents.run(student.id, student.firstName, student.lastName || '');
       enrollStmt.run(student.id, subjectId);
       for (const evaluation of evaluations) {
         gradeStmt.run(student.id, evaluation.id);
@@ -236,7 +291,7 @@ app.post('/api/subjects/:subjectId/enrollments/bulk', (req, res) => {
 app.post('/api/subjects/:subjectId/enrollments', (req, res) => {
   const { subjectId } = req.params;
   const { student } = req.body ?? {};
-  if (!student?.id || !student?.name) {
+  if (!student?.id || !student?.firstName) {
     res.status(400).json({ error: 'student is required' });
     return;
   }
@@ -247,11 +302,11 @@ app.post('/api/subjects/:subjectId/enrollments', (req, res) => {
     return;
   }
 
-  upsertStudents.run(student.id, student.name);
+  upsertStudents.run(student.id, student.firstName, student.lastName || '');
   db.prepare('INSERT INTO enrollments (studentId, subjectId) VALUES (?, ?)').run(student.id, subjectId);
 
   const gradeStmt = db.prepare("INSERT OR IGNORE INTO grades (studentId, evaluationId, score, observation) VALUES (?, ?, NULL, '')");
-  for (const evaluation of getSubjectEvaluations.all(subjectId)) {
+  for (const evaluation of getSubjectEvaluations().all(subjectId)) {
     gradeStmt.run(student.id, evaluation.id);
   }
 
@@ -279,7 +334,7 @@ app.post('/api/subjects/:subjectId/evaluations', (req, res) => {
       .run(evaluation.id, evaluation.subjectId, evaluation.corte, evaluation.name, evaluation.percentage);
 
     const gradeStmt = db.prepare("INSERT OR IGNORE INTO grades (studentId, evaluationId, score, observation) VALUES (?, ?, NULL, '')");
-    for (const student of getSubjectStudents.all(subjectId)) {
+    for (const student of getSubjectStudents().all(subjectId)) {
       gradeStmt.run(student.id, evaluation.id);
     }
   });
@@ -321,7 +376,7 @@ app.get('/api/subjects/:subjectId/attendance', (req, res) => {
     return;
   }
 
-  const records = getSubjectAttendanceByDate.all(subjectId, date).map((record) => ({
+  const records = getSubjectAttendanceByDate().all(subjectId, date).map((record) => ({
     ...record,
     present: Boolean(record.present),
   }));
@@ -367,7 +422,16 @@ app.post('/api/migrations/import-local-data', (req, res) => {
 
   const importData = db.transaction(() => {
     for (const student of students) {
-      upsertStudents.run(student.id, student.name);
+      if (student.firstName) {
+        upsertStudents.run(student.id, student.firstName, student.lastName || '');
+      } else if (student.name) {
+        const parts = student.name.trim().split(/\s+/);
+        let f = '', l = '';
+        if (parts.length === 1) f = parts[0];
+        else if (parts.length === 2) { f = parts[0]; l = parts[1]; }
+        else { l = parts.slice(-2).join(' '); f = parts.slice(0, -2).join(' '); }
+        upsertStudents.run(student.id, f, l);
+      }
     }
 
     const insertSubject = db.prepare('INSERT OR IGNORE INTO subjects (id, name, period, ordering) VALUES (?, ?, ?, ?)');
@@ -396,7 +460,7 @@ app.post('/api/migrations/import-local-data', (req, res) => {
 });
 
 app.get('/api/export', (_req, res) => {
-  db.pragma('wal_checkpoint(FULL)');
+  db.exec('PRAGMA wal_checkpoint(FULL)');
   const fileBuffer = fs.readFileSync(dbPath);
   res.setHeader('Content-Type', 'application/x-sqlite3');
   res.setHeader('Content-Disposition', `attachment; filename="deathnote_${new Date().toISOString().split('T')[0]}.sqlite"`);

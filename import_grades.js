@@ -1,7 +1,7 @@
-import Database from 'better-sqlite3';
+import { DatabaseSync } from 'node:sqlite';
 
 const dbPath = './data/deathnote.sqlite';
-const db = new Database(dbPath);
+const db = new DatabaseSync(dbPath);
 
 const subjectId = 'subject-1778533780243-30a16abd';
 const evaluationId = 'eval-1778869685917-4d0e34c4';

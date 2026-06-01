@@ -73,11 +73,6 @@ const GradeTable: React.FC<GradeTableProps> = ({ students, evaluations, grades, 
     return headers;
   };
   
-  const sortedStudents = useMemo(() => {
-    const getLastName = (name: string) => name.substring(name.indexOf(' ') + 1);
-    return [...students].sort((a, b) => getLastName(a.name).localeCompare(getLastName(b.name)));
-  }, [students]);
-
   const handleOpenObservationModal = (student: Student, evaluation: Evaluation, grade?: Grade) => {
     setEditingGrade({ student, evaluation, grade });
     setObservationDraft(grade?.observation ?? '');
@@ -113,7 +108,7 @@ const GradeTable: React.FC<GradeTableProps> = ({ students, evaluations, grades, 
           </tr>
         </thead>
         <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
-          {sortedStudents.map(student => {
+          {students.map(student => {
             const weightedCorte1 = calculateWeightedCorteSum(student.id, 1);
             const weightedCorte2 = calculateWeightedCorteSum(student.id, 2);
             const weightedCorte3 = calculateWeightedCorteSum(student.id, 3);
@@ -121,24 +116,26 @@ const GradeTable: React.FC<GradeTableProps> = ({ students, evaluations, grades, 
 
             return (
               <tr key={student.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
-                <td className="p-3 font-medium text-gray-700 dark:text-gray-200 sticky left-0 bg-white dark:bg-gray-800 z-10">{student.name}</td>
+                <td className="p-3 font-medium text-gray-700 dark:text-gray-200 sticky left-0 bg-white dark:bg-gray-800 z-10">
+                  <span className="font-bold">{student.lastName}</span>, {student.firstName}
+                </td>
                 <td className="p-3">{student.id}</td>
                 <td className="p-3">
                   <button
                     onClick={() => onEditStudent(student)}
                     className="p-1 text-gray-500 hover:text-yellow-600 dark:hover:text-yellow-400 transition-colors"
-                    aria-label={`Editar a ${student.name}`}
+                    aria-label={`Editar a ${student.lastName}, ${student.firstName}`}
                   >
                     <PencilIcon className="w-5 h-5" />
                   </button>
                     <button
                         onClick={() => {
-                            if (window.confirm(`¿Estás seguro de que deseas eliminar a ${student.name} de esta materia? Se borrarán todas sus calificaciones.`)) {
+                            if (window.confirm(`¿Estás seguro de que deseas eliminar a ${student.lastName}, ${student.firstName} de esta materia? Se borrarán todas sus calificaciones.`)) {
                                 onUnenrollStudent(student.id);
                             }
                         }}
                         className="p-1 text-gray-500 hover:text-red-600 dark:hover:text-red-400 transition-colors"
-                        aria-label={`Eliminar a ${student.name}`}
+                        aria-label={`Eliminar a ${student.lastName}, ${student.firstName}`}
                     >
                         <TrashIcon className="w-5 h-5" />
                     </button>

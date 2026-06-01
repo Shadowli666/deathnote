@@ -40,7 +40,7 @@ const SubjectView: React.FC<SubjectViewProps> = ({ subject, students, evaluation
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [editingEvaluation, setEditingEvaluation] = useState<Evaluation | null>(null);
   const [editingStudent, setEditingStudent] = useState<Student | null>(null);
-  const [editStudentForm, setEditStudentForm] = useState({ id: '', name: '' });
+  const [editStudentForm, setEditStudentForm] = useState({ id: '', firstName: '', lastName: '' });
   const [studentEditError, setStudentEditError] = useState('');
 
   const [newEval, setNewEval] = useState({ name: '', percentage: '', corte: '1' });
@@ -67,7 +67,7 @@ const SubjectView: React.FC<SubjectViewProps> = ({ subject, students, evaluation
 
   const handleOpenEditStudentModal = (student: Student) => {
     setEditingStudent(student);
-    setEditStudentForm({ id: student.id, name: student.name });
+    setEditStudentForm({ id: student.id, firstName: student.firstName, lastName: student.lastName });
     setStudentEditError('');
     setIsEditStudentModalOpen(true);
   };
@@ -75,23 +75,25 @@ const SubjectView: React.FC<SubjectViewProps> = ({ subject, students, evaluation
   const handleCloseEditStudentModal = () => {
     setIsEditStudentModalOpen(false);
     setEditingStudent(null);
-    setEditStudentForm({ id: '', name: '' });
+    setEditStudentForm({ id: '', firstName: '', lastName: '' });
     setStudentEditError('');
   };
 
   const handleSaveStudent = async () => {
     if (!editingStudent) return;
 
-    if (!editStudentForm.id.trim() || !editStudentForm.name.trim()) {
+    if (!editStudentForm.id.trim() || !editStudentForm.firstName.trim() || !editStudentForm.lastName.trim()) {
       setStudentEditError('Cédula y nombre son obligatorios.');
       return;
     }
 
-    const success = await onUpdateStudent(editingStudent.id, {
-      ...editingStudent,
+    const updatedStudent: Student = {
       id: editStudentForm.id.trim(),
-      name: editStudentForm.name.trim(),
-    });
+      firstName: editStudentForm.firstName.trim(),
+      lastName: editStudentForm.lastName.trim(),
+    };
+
+    const success = await onUpdateStudent(editingStudent.id, updatedStudent);
 
     if (!success) {
       setStudentEditError('La cédula ingresada ya existe.');
@@ -434,7 +436,7 @@ const SubjectView: React.FC<SubjectViewProps> = ({ subject, students, evaluation
                   {students.map((student) => (
                     <li key={student.id} className="grid grid-cols-[1fr_auto] items-center px-4 py-3">
                       <div>
-                        <p className="font-medium text-gray-800 dark:text-gray-100">{student.name}</p>
+                        <p className="font-medium text-gray-800 dark:text-gray-100">{student.lastName}, {student.firstName}</p>
                         <p className="text-xs text-gray-500 dark:text-gray-400">Cédula: {student.id}</p>
                       </div>
                       <label className="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-200 cursor-pointer">
@@ -517,22 +519,33 @@ const SubjectView: React.FC<SubjectViewProps> = ({ subject, students, evaluation
             />
           </div>
           <div>
-            <label htmlFor="edit-student-name" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Nombre Completo</label>
-            <input
-              id="edit-student-name"
-              title="Nombre completo"
-              placeholder="Ej: Ana Pérez"
-              type="text"
-              value={editStudentForm.name}
-              onChange={e => setEditStudentForm(prev => ({ ...prev, name: e.target.value }))}
-              className="mt-1 block w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-            />
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label htmlFor="edit-student-firstName" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Nombres</label>
+              <input
+                id="edit-student-firstName"
+                title="Nombres"
+                placeholder="Ej: Ana"
+                type="text"
+                value={editStudentForm.firstName}
+                onChange={e => setEditStudentForm(prev => ({ ...prev, firstName: e.target.value }))}
+                className="mt-1 block w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+              />
+            </div>
+            <div>
+              <label htmlFor="edit-student-lastName" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Apellidos</label>
+              <input
+                id="edit-student-lastName"
+                title="Apellidos"
+                placeholder="Ej: Pérez"
+                type="text"
+                value={editStudentForm.lastName}
+                onChange={e => setEditStudentForm(prev => ({ ...prev, lastName: e.target.value }))}
+                className="mt-1 block w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+              />
+            </div>
           </div>
-          {studentEditError && <p className="text-red-500 text-sm">{studentEditError}</p>}
-          <div className="flex justify-end gap-2 pt-2">
-            <button onClick={handleCloseEditStudentModal} className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 dark:bg-gray-600 dark:text-gray-100 dark:hover:bg-gray-500">Cancelar</button>
-            <button onClick={handleSaveStudent} className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">Guardar Cambios</button>
-          </div>
+        </div>
         </div>
       </Modal>
 
